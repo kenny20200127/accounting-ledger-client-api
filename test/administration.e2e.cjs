@@ -1,0 +1,153 @@
+require('dotenv').config({quiet:true});require('reflect-metadata');
+const {before,after,test}=require('node:test');const assert=require('node:assert/strict');const {randomUUID}=require('node:crypto');const fs=require('node:fs');const sharp=require('sharp');const request=require('supertest');
+const {NestFactory}=require('@nestjs/core');const {ValidationPipe}=require('@nestjs/common');const {JwtService}=require('@nestjs/jwt');const {DataSource}=require('typeorm');const {AppModule}=require('../dist/app.module');
+let app,ds,platformToken;const platformUserId=randomUUID();const platformPassword='Portal-Test-'+randomUUID();const created=[];
+before(async()=>{app=await NestFactory.create(AppModule,{logger:false});app.setGlobalPrefix('api/v1');app.useGlobalPipes(new ValidationPipe({whitelist:true,forbidNonWhitelisted:true,transform:true}));await app.init();ds=app.get(DataSource);const [u]=await ds.query('SELECT user_id,auth_version FROM core.users WHERE is_platform_admin AND is_active LIMIT 1');assert.ok(u,'Seed a platform administrator first');platformToken=app.get(JwtService).sign({sub:u.user_id,authVersion:u.auth_version,scope:'platform'});await ds.query('INSERT INTO core.users(user_id,username,email,password_hash,is_platform_admin) VALUES($1,$2,$3,$4,true)',[platformUserId,'platform-test-'+platformUserId,platformUserId+'@example.test',await require('bcryptjs').hash(platformPassword,12)]);});
+after(async()=>{try{for(const cid of created.reverse())await cleanup(cid);}finally{if(ds)await ds.query('DELETE FROM core.users WHERE user_id=$1',[platformUserId]);await app?.close();}});
+function call(method,path,token=platformToken,body){let req=request(app.getHttpServer())[method]('/api/v1/'+path).set('Authorization','Bearer '+token);return body===undefined?req:req.send(body);}
+async function cleanup(cid){await ds.transaction(async m=>{
+ await m.query('DELETE FROM audit.audit_logs WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM assets.asset_depreciations WHERE asset_id IN(SELECT asset_id FROM assets.fixed_assets WHERE company_id=$1)',[cid]);
+ await m.query('DELETE FROM assets.fixed_assets WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM sales.customer_payments WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM sales.invoice_lines WHERE invoice_id IN(SELECT invoice_id FROM sales.invoices WHERE company_id=$1)',[cid]);await m.query('DELETE FROM sales.invoices WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM purchasing.expenses WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM banking.bank_transactions WHERE bank_account_id IN(SELECT bank_account_id FROM banking.bank_accounts WHERE company_id=$1)',[cid]);await m.query('DELETE FROM banking.bank_accounts WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM accounting.journal_entry_lines WHERE journal_entry_id IN(SELECT journal_entry_id FROM accounting.journal_entries WHERE company_id=$1)',[cid]);await m.query('DELETE FROM accounting.journal_entries WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM ledger.histories WHERE company_id=$1',[cid]);await m.query('DELETE FROM ledger.ledgers WHERE company_id=$1',[cid]);await m.query('DELETE FROM ledger.monthly_balances WHERE company_id=$1',[cid]);await m.query('DELETE FROM accounting.legacy_migration_records WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM sales.customers WHERE company_id=$1',[cid]);await m.query('DELETE FROM purchasing.suppliers WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM core.user_roles WHERE user_id IN(SELECT user_id FROM core.users WHERE company_id=$1)',[cid]);await m.query('DELETE FROM core.users WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM core.role_menus WHERE role_id IN(SELECT role_id FROM core.roles WHERE company_id=$1)',[cid]);await m.query('DELETE FROM core.roles WHERE company_id=$1',[cid]);await m.query('DELETE FROM core.branches WHERE company_id=$1',[cid]);
+ await m.query('DELETE FROM accounting.accounting_periods WHERE fiscal_year_id IN(SELECT fiscal_year_id FROM accounting.fiscal_years WHERE company_id=$1)',[cid]);await m.query('DELETE FROM accounting.fiscal_years WHERE company_id=$1',[cid]);await m.query('DELETE FROM accounting.accounts WHERE company_id=$1',[cid]);await m.query('DELETE FROM core.companies WHERE company_id=$1',[cid]);
+});}
+async function onboard(label){const suffix=randomUUID().slice(0,8),username='tenant-'+suffix,password='Temporary-Test-'+randomUUID();const result=await call('post','platform/companies',platformToken,{companyCode:'TEST-'+suffix,companyName:label,industry:'Verification',country:'Nigeria',primaryColor:'#7c3aed',secondaryColor:'#f4efff',fiscalYearStartMonth:4,fiscalYearStartDay:1,firstAdmin:{username,email:username+'@example.test',password}}).expect(201);const data=result.body;created.push(data.company.companyId);const login=await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:username,password}).expect(201);assert.equal(login.body.user.isPlatformAdmin,false);assert.equal(login.body.user.isCompanyAdmin,true);assert.ok(!JSON.stringify(login.body).includes('passwordHash'));return {...data,token:login.body.accessToken,password,username,cid:data.company.companyId};}
+test('onboarding, tenant isolation, company branding, scoped permissions and session lifecycle',async t=>{
+ const a=await onboard('Tenant Alpha Verification'),b=await onboard('Tenant Beta Verification');
+ await t.test('separate login endpoints and session scopes enforce application boundaries',async()=>{
+  const creds={identifier:'platform-test-'+platformUserId,password:platformPassword};
+  await request(app.getHttpServer()).post('/api/v1/auth/company/login').send(creds).expect(403);
+  await request(app.getHttpServer()).post('/api/v1/auth/login').send(creds).expect(403);
+  const login=(await request(app.getHttpServer()).post('/api/v1/auth/platform/login').send(creds).expect(201)).body;
+  assert.deepEqual(login.menus.map(m=>m.menuCode),['PLATFORM_ADMIN']);
+  await call('get','platform/companies',login.accessToken).expect(200);
+  for(const path of ['accounts?companyId='+a.cid,'reports/financial/options?companyId='+a.cid,'companies','users?companyId='+a.cid,'roles?companyId='+a.cid])await call('get',path,login.accessToken).expect(403);
+  await request(app.getHttpServer()).post('/api/v1/auth/platform/login').send({identifier:a.username,password:a.password}).expect(403);
+  await call('get','platform/companies',a.token).expect(403);
+  const list=(await call('get','platform/companies/'+a.cid+'/users').expect(200)).body;assert.equal(list[0].userId,a.administrator.userId);
+  await call('patch','platform/companies/'+b.cid+'/users/'+a.administrator.userId,platformToken,{isActive:false}).expect(403);
+  const roles=(await call('get','platform/companies/'+a.cid+'/roles').expect(200)).body;assert.equal(roles.length,3);
+  await call('get','platform/companies/'+a.cid+'/audit-logs').expect(200);
+ });
+ const accountsA=(await call('get','accounts?companyId='+a.cid,a.token).expect(200)).body,accountsB=(await call('get','accounts?companyId='+b.cid,b.token).expect(200)).body;
+ const account=(code,rows=accountsB)=>rows.find(x=>x.accountCode===code).accountId;
+ const periods=(await call('get','accounting-periods',a.token).expect(200)).body;assert.equal(periods.length,12);assert.ok(periods.every(p=>p.fiscalYearId===a.fiscalYear.fiscalYearId));assert.equal(accountsA.length,9);
+ const periodsB=(await call('get','accounting-periods?companyId='+b.cid,b.token).expect(200)).body;const period=periodsB.find(p=>p.startDate<='2026-10-14'&&p.endDate>='2026-10-14');assert.ok(period);
+ await t.test('company lists and reference IDs are isolated',async()=>{
+  const list=(await call('get','companies',a.token).expect(200)).body;assert.deepEqual(list.map(x=>x.companyId),[a.cid]);
+  await call('get','platform/companies',a.token).expect(403);await call('post','companies',a.token,{}).expect(403);await call('patch','companies/'+a.cid,a.token,{isActive:false}).expect(403);
+  for(const path of ['accounts','branches','fiscal-years','accounting-periods','users','roles','reports/financial/options','reports/legacy-migration'])await call('get',path+'?companyId='+b.cid,a.token).expect(403);
+  for(const [path,id] of [['companies',b.cid],['accounts',account('1000')],['branches',b.branch.branchId],['fiscal-years',b.fiscalYear.fiscalYearId],['accounting-periods',period.periodId],['roles',b.roles[0].roleId]])await call('get',path+'/'+id+(path==='roles'?'/permissions':''),a.token).expect(403);
+  await call('patch','users/'+b.administrator.userId,a.token,{isActive:false}).expect(403);
+  await call('post','customers',a.token,{companyId:a.cid,customerCode:'INVALID',customerName:'Invalid reference',receivableAccountId:account('1200')}).expect(403);
+  await call('post','journals',a.token,{companyId:a.cid,periodId:periods[0].periodId,transactionDate:periods[0].startDate,description:'Foreign account rejected',lines:[{accountId:account('1000'),debitAmount:'1',creditAmount:'0'},{accountId:account('4000',accountsA),debitAmount:'0',creditAmount:'1'}]}).expect(403);
+ });
+ const customer=(await call('post','customers',b.token,{companyId:b.cid,customerCode:'CUSTOMER',customerName:'Customer',receivableAccountId:account('1200')}).expect(201)).body;
+ const supplier=(await call('post','suppliers',b.token,{companyId:b.cid,supplierCode:'SUPPLIER',supplierName:'Supplier',payableAccountId:account('2000')}).expect(201)).body;
+ const bank=(await call('post','banking/accounts',b.token,{companyId:b.cid,accountId:account('1000'),bankName:'Test Bank',accountName:'Operating'}).expect(201)).body;
+ const tx=(await call('post','banking/accounts/'+bank.bankAccountId+'/transactions',b.token,{transactionDate:'2026-10-14',transactionType:'DEBIT',amount:'10.00'}).expect(201)).body;
+ const expense=(await call('post','expenses',b.token,{companyId:b.cid,expenseNumber:'EXP-1',expenseDate:'2026-10-14',description:'Test expense',expenseAccountId:account('5000'),amount:'1.00'}).expect(201)).body;
+ const asset=(await call('post','fixed-assets',b.token,{companyId:b.cid,assetCode:'ASSET',assetName:'Test asset',purchaseDate:'2026-10-14',purchaseCost:'100.00',usefulLifeMonths:12,assetAccountId:account('1500'),depreciationAccountId:account('5900'),accumulatedDepreciationAccountId:account('1590')}).expect(201)).body;
+ const invoice=(await call('post','invoices',b.token,{companyId:b.cid,customerId:customer.customerId,invoiceDate:'2026-10-14',lines:[{description:'Test item',quantity:'1',unitPrice:'10',revenueAccountId:account('4000')}]}).expect(201)).body;assert.match(invoice.invoiceNumber,/^INV-20261014-\d{4}$/);
+ const payment=(await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',bankAccountId:bank.bankAccountId}).expect(201)).body;assert.match(payment.paymentNumber,/^PAY-20261014-\d{4}$/);
+ await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentNumber:'PAY-1',paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00'}).expect(400);
+ const journal=(await call('post','journals',b.token,{companyId:b.cid,branchId:b.branch.branchId,periodId:period.periodId,transactionDate:'2026-10-14',description:'Test revenue',lines:[{accountId:account('1000'),debitAmount:'12.34',creditAmount:'0.00'},{accountId:account('4000'),debitAmount:'0.00',creditAmount:'12.34'}]}).expect(201)).body;
+ await t.test('all operational detail routes and nested actions reject foreign records',async()=>{
+  for(const [path,id] of [['customers',customer.customerId],['suppliers',supplier.supplierId],['banking/accounts',bank.bankAccountId],['expenses',expense.expenseId],['fixed-assets',asset.assetId],['invoices',invoice.invoiceId],['customer-payments',payment.paymentId],['journals',journal.journalEntryId]])await call('get',path+'/'+id,a.token).expect(403);
+  await call('get','customers/'+customer.customerId+'/payments',a.token).expect(403);await call('get','banking/accounts/'+bank.bankAccountId+'/transactions',a.token).expect(403);
+  await call('patch','banking/accounts/'+bank.bankAccountId+'/transactions/'+tx.bankTransactionId+'/reconcile',a.token,{}).expect(403);
+  await call('get','fixed-assets/'+asset.assetId+'/depreciations',a.token).expect(403);await call('post','journals/'+journal.journalEntryId+'/post',a.token,{}).expect(403);
+  await call('patch','accounting-periods/'+period.periodId+'/close',a.token,{}).expect(403);
+  const post=await call('post','journals/'+journal.journalEntryId+'/post',b.token,{}).expect(201);assert.equal(post.body.status,'POSTED');
+  const report=(await call('get','reports/financial?companyId='+b.cid+'&report=profit-loss&asOf=2026-10-14',b.token).expect(200)).body;assert.equal(report.totals[0].values.ytdAmount,'-12.34');
+ });
+ await t.test('payments and expenses post to the ledger against their accounts',async()=>{
+  const histories=(await call('get','ledger-batches?companyId='+b.cid+'&limit=50',b.token).expect(200)).body;
+  const pv=histories.items.filter(x=>x.docType==='PV'),rv=histories.items.filter(x=>x.docType==='RV');
+  assert.equal(pv.length,1);assert.equal(pv[0].debitAmount,'1.00');assert.equal(pv[0].docNo,'PV-20261014-0001');assert.equal(pv[0].refNo,'EXP-1');
+  assert.equal(rv.length,2);assert.equal(new Set(rv.map(x=>x.docNo)).size,1);assert.match(rv[0].docNo,/^RV-20261014-\d{4}$/);
+  assert.equal(histories.total,3);
+  const balances=(await call('get','ledger-batches/balances?companyId='+b.cid,b.token).expect(200)).body;
+  const byCode=(code)=>balances.find((x)=>x.accountCode===code);
+  assert.equal(byCode('5000').debitBalance,'1.00');
+  assert.equal(byCode('1000').debitBalance,'1.00');
+  assert.equal(byCode('1200').creditBalance,'1.00');
+ });
+ await t.test('logos are normalized and branded financial PDFs render',async()=>{
+  const png=await sharp({create:{width:100,height:50,channels:4,background:'#7c3aed'}}).png().toBuffer();
+  const result=await request(app.getHttpServer()).post('/api/v1/companies/'+b.cid+'/logo').set('Authorization','Bearer '+b.token).attach('file',png,'company.png').expect(201);assert.ok(result.body.logoData.startsWith('data:image/png;base64,'));
+  await request(app.getHttpServer()).post('/api/v1/companies/'+b.cid+'/logo').set('Authorization','Bearer '+a.token).attach('file',png,'company.png').expect(403);
+  await request(app.getHttpServer()).post('/api/v1/companies/'+b.cid+'/logo').set('Authorization','Bearer '+b.token).attach('file',Buffer.from('<svg></svg>'),'logo.svg').expect(400);
+  await request(app.getHttpServer()).post('/api/v1/companies/'+b.cid+'/logo').set('Authorization','Bearer '+b.token).attach('file',Buffer.alloc(2097153),'large.png').expect(413);
+  const report=(await call('get','reports/financial?companyId='+b.cid+'&report=profit-loss&asOf=2026-10-14',b.token).expect(200)).body;assert.equal(report.primaryColor,'#7c3aed');assert.ok(report.logoData);
+  const pdf=await call('get','reports/financial/pdf?companyId='+b.cid+'&report=profit-loss&asOf=2026-10-14',b.token).buffer(true).parse((res,done)=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>done(null,Buffer.concat(chunks)));}).expect(200);
+  assert.equal(pdf.body.subarray(0,4).toString(),'%PDF');fs.mkdirSync('output/pdf',{recursive:true});fs.writeFileSync('output/pdf/company-branded-verification.pdf',pdf.body);
+ });
+ await t.test('scoped user administration blocks privilege escalation and preserves the last administrator',async()=>{
+  await call('patch','users/'+a.administrator.userId,a.token,{isActive:false}).expect(400);
+  await call('patch','users/'+a.administrator.userId,a.token,{roleIds:[a.roles.find(r=>r.roleName==='Viewer').roleId]}).expect(400);
+  const [global]=await ds.query("SELECT role_id FROM core.roles WHERE role_code='ADMIN'");
+  const userDto={companyId:a.cid,username:'staff-'+randomUUID().slice(0,8),email:randomUUID()+'@example.test',password:'Temporary-Password-'+randomUUID(),roleIds:[a.roles.find(r=>r.roleName==='Viewer').roleId]};
+  await call('post','users',a.token,{...userDto,roleIds:[global.role_id]}).expect(400);await call('post','users',a.token,{...userDto,roleIds:[b.roles[0].roleId]}).expect(400);await call('post','users',a.token,{...userDto,isPlatformAdmin:true}).expect(400);
+  const user=(await call('post','users',a.token,userDto).expect(201)).body;assert.ok(!('passwordHash' in user));
+  const login=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:userDto.username,password:userDto.password}).expect(201)).body;assert.equal(login.user.isCompanyAdmin,false);
+  await call('get','companies',login.accessToken).expect(200);await call('post','customers',login.accessToken,{companyId:a.cid,customerCode:'NO',customerName:'No access'}).expect(403);await call('get','users?companyId='+a.cid,login.accessToken).expect(403);
+  await call('patch','users/'+user.userId,a.token,{roleIds:[a.roles.find(r=>r.roleName==='Accountant').roleId]}).expect(200);
+  await call('get','auth/me',login.accessToken).expect(401);
+  const accountant=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:userDto.username,password:userDto.password}).expect(201)).body;
+  await call('post','customers',accountant.accessToken,{companyId:a.cid,customerCode:'STAFF',customerName:'Staff-created customer'}).expect(201);
+  await call('post','users/'+user.userId+'/reset-password',a.token,{password:'Reset-Test-Password-'+randomUUID()}).expect(201);await call('get','auth/me',accountant.accessToken).expect(401);
+  await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:userDto.username,password:userDto.password}).expect(401);
+  await call('patch','users/'+user.userId,a.token,{isActive:false}).expect(200);
+ });
+ await t.test('custom role permissions cannot grant platform access; audit records are scoped',async()=>{
+  const perms=(await call('get','roles/'+a.roles[0].roleId+'/permissions',a.token).expect(200)).body;const [platformMenu]=await ds.query("SELECT menu_id FROM core.menus WHERE menu_code='PLATFORM_ADMIN'");const body={companyId:a.cid,roleName:'Reports only',permissions:perms.map(({menuName,menuCode,...p})=>({...p,canView:menuCode==='REPORTS',canCreate:false,canEdit:false,canDelete:false,canApprove:false}))};
+  await call('post','roles',a.token,{...body,permissions:[{menuId:platformMenu.menu_id,canView:true,canCreate:true,canEdit:true,canDelete:true,canApprove:true}]}).expect(400);
+  const custom=(await call('post','roles',a.token,body).expect(201)).body;
+  const dto={companyId:a.cid,username:'reports-'+randomUUID().slice(0,8),email:randomUUID()+'@example.test',password:'Reports-Test-Password-'+randomUUID(),roleIds:[custom.roleId]};await call('post','users',a.token,dto).expect(201);
+  const login=(await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:dto.username,password:dto.password}).expect(201)).body;assert.deepEqual(login.menus.map(m=>m.menuCode),['REPORTS']);
+  await call('get','reports/financial/options?companyId='+a.cid,login.accessToken).expect(200);await call('get','accounts?companyId='+a.cid,login.accessToken).expect(403);
+  await call('patch','roles/'+a.roles[0].roleId,a.token,{...body,roleName:'Changed admin'}).expect(400);
+  const audit=(await call('get','audit-logs?companyId='+a.cid+'&limit=2',a.token).expect(200)).body;assert.ok(audit.total>=5);assert.equal(audit.items.length,2);assert.ok(!JSON.stringify(audit).includes('passwordHash'));
+ });
+ await t.test('platform can edit and delete company users while preserving records and administrator access',async()=>{
+  const role=a.roles.find(r=>r.roleName==='Accountant');const password='Delete-Test-'+randomUUID();
+  const dto={companyId:a.cid,username:'delete-test-'+randomUUID().slice(0,8),email:randomUUID()+'@example.test',password,roleIds:[role.roleId]};
+  const user=(await call('post','platform/companies/'+a.cid+'/users',platformToken,dto).expect(201)).body;
+  const before=(await request(app.getHttpServer()).post('/api/v1/auth/company/login').send({identifier:dto.username,password}).expect(201)).body;
+  const newUsername='edited-'+randomUUID().slice(0,8),newEmail=randomUUID()+'@example.test';
+  await call('patch','platform/companies/'+a.cid+'/users/'+user.userId,platformToken,{username:newUsername,email:newEmail,firstName:'Edited',lastName:'User',roleIds:[role.roleId]}).expect(200);
+  await call('get','auth/me',before.accessToken).expect(401);
+  await request(app.getHttpServer()).post('/api/v1/auth/company/login').send({identifier:dto.username,password}).expect(401);
+  const login=(await request(app.getHttpServer()).post('/api/v1/auth/company/login').send({identifier:newUsername,password}).expect(201)).body;
+  assert.equal(login.user.email,newEmail);assert.equal(login.user.firstName,'Edited');
+  const period=periods.find(p=>p.startDate<='2026-10-14'&&p.endDate>='2026-10-14');
+  const journal=(await call('post','journals',login.accessToken,{companyId:a.cid,periodId:period.periodId,transactionDate:'2026-10-14',description:'Deleted user history verification',lines:[{accountId:account('1000',accountsA),debitAmount:'5.00',creditAmount:'0.00'},{accountId:account('4000',accountsA),debitAmount:'0.00',creditAmount:'5.00'}]}).expect(201)).body;
+  assert.equal(journal.createdBy,user.userId);
+  await call('delete','platform/companies/'+a.cid+'/users/'+user.userId,a.token).expect(403);
+  await call('delete','platform/companies/'+b.cid+'/users/'+user.userId).expect(403);
+  await call('delete','platform/companies/'+a.cid+'/users/'+a.administrator.userId).expect(400);
+  const deleted=(await call('delete','platform/companies/'+a.cid+'/users/'+user.userId).expect(200)).body;assert.equal(deleted.deleted,true);
+  const list=(await call('get','platform/companies/'+a.cid+'/users').expect(200)).body;assert.ok(!list.some(u=>u.userId===user.userId));
+  await call('get','auth/me',login.accessToken).expect(401);await request(app.getHttpServer()).post('/api/v1/auth/company/login').send({identifier:newUsername,password}).expect(401);
+  await call('patch','platform/companies/'+a.cid+'/users/'+user.userId,platformToken,{isActive:true}).expect(404);
+  await call('delete','platform/companies/'+a.cid+'/users/'+user.userId).expect(404);
+  const [retained]=await ds.query('SELECT created_by FROM accounting.journal_entries WHERE journal_entry_id=$1',[journal.journalEntryId]);assert.equal(retained.created_by,user.userId);
+  const [record]=await ds.query('SELECT is_active,deleted_at FROM core.users WHERE user_id=$1',[user.userId]);assert.equal(record.is_active,false);assert.ok(record.deleted_at);
+  const [audit]=await ds.query("SELECT new_values FROM audit.audit_logs WHERE record_id=$1 AND action='USER_DELETED'",[user.userId]);assert.equal(audit.new_values.historyPreserved,true);
+ });
+ await t.test('suspension blocks company logins and active tokens while platform access remains',async()=>{
+  await call('patch','platform/companies/'+a.cid,platformToken,{isActive:false}).expect(200);await call('get','auth/me',a.token).expect(401);
+  await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:a.username,password:a.password}).expect(401);await call('get','platform/companies/'+a.cid).expect(200);
+  await call('patch','platform/companies/'+a.cid,platformToken,{isActive:true}).expect(200);await call('get','auth/me',a.token).expect(200);
+ });
+});
