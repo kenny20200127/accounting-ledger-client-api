@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
 Body, Req,
 Controller,
@@ -11,6 +12,8 @@ Query,
 import { AccountingPeriodsService } from './accounting-periods.service';
 import { CreateAccountingPeriodDto } from './dto/create-accounting-period.dto';
 
+@ApiTags('accounting-periods')
+@ApiBearerAuth()
 @Controller('accounting-periods')
 export class AccountingPeriodsController {
 constructor(

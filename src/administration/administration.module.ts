@@ -16,12 +16,20 @@ import {
   Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiTags,
+} from '@nestjs/swagger';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { TenantAccessService as Access } from './tenant-access.service';
 import { ResetPasswordDto, UpdateUserDto } from './admin.dto';
 import { AdministrationService } from './administration.service';
 import { TenantAccessService } from './tenant-access.service';
 import { OnboardCompanyDto, SaveRoleDto, UpdateCompanyDto } from './admin.dto';
+@ApiTags('platform/companies')
+@ApiBearerAuth()
 @Controller('platform/companies')
 class PlatformController {
   constructor(
@@ -50,6 +58,14 @@ class PlatformController {
     );
   }
   @Post(':id/logo')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
@@ -157,6 +173,8 @@ class PlatformController {
     );
   }
 }
+@ApiTags('roles')
+@ApiBearerAuth()
 @Controller('roles')
 class RolesController {
   constructor(private readonly admin: AdministrationService) {}
@@ -180,6 +198,8 @@ class RolesController {
     return this.admin.saveRole(dto, req.actor, id);
   }
 }
+@ApiTags('audit-logs')
+@ApiBearerAuth()
 @Controller('audit-logs')
 class AuditController {
   constructor(private readonly admin: AdministrationService) {}

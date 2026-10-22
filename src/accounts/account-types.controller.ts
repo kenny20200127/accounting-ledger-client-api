@@ -1,7 +1,10 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { CreateAccountTypeDto } from './dto/create-account-type.dto';
 import { AccountTypesService } from './account-types.service';
 
+@ApiTags('account-types')
+@ApiBearerAuth()
 @Controller('account-types')
 export class AccountTypesController {
   constructor(private readonly service: AccountTypesService) {}

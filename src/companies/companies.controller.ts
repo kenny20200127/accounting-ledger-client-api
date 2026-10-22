@@ -1,4 +1,10 @@
 import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiTags,
+} from '@nestjs/swagger';
+import {
   Body,
   NotFoundException,
   Controller,
@@ -19,6 +25,8 @@ import {
   OnboardCompanyDto,
   UpdateCompanyDto,
 } from '../administration/admin.dto';
+@ApiTags('companies')
+@ApiBearerAuth()
 @Controller('companies')
 export class CompaniesController {
   constructor(private readonly admin: AdministrationService) {}
@@ -46,6 +54,14 @@ export class CompaniesController {
     return this.admin.updateCompany(id, dto, req.actor);
   }
   @Post(':id/logo')
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },

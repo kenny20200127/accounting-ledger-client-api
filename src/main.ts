@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 interface IdRequest {
@@ -40,9 +41,42 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const port = config.get<number>('APP_PORT', 3000);
 
+  const docsEnabled =
+    config.get<string>('SWAGGER_ENABLED') === 'true' ||
+    config.get<string>('NODE_ENV', 'development') !== 'production';
+
+  if (docsEnabled) {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Accounting Ledger API')
+      .setDescription(
+        'Multi-tenant accounting API. Every endpoint except the public login and ' +
+          'menu routes requires a JWT issued by POST /api/v1/auth/login, ' +
+          '/auth/company/login or /auth/platform/login.',
+      )
+      .setVersion('1')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Access token from one of the login endpoints.',
+        },
+        'bearer',
+      )
+      .build();
+
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+      customSiteTitle: 'Accounting Ledger API docs',
+    });
+  }
+
   await app.listen(port);
 
-  console.log(`Accounting Ledger API running on port ${port}`);
+  console.log(
+    `Accounting Ledger API running on port ${port}${docsEnabled ? ' (docs at /docs)' : ''}`,
+  );
 }
 
 void bootstrap();

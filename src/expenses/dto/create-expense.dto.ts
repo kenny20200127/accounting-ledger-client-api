@@ -31,9 +31,10 @@ export class CreateExpenseDto {
   @IsUUID()
   expenseAccountId: string;
 
-  @IsOptional()
+  // The account credited by the payment voucher — mandatory so the ledger never
+  // gets a one-sided expense posting.
   @IsUUID()
-  paymentAccountId?: string;
+  paymentAccountId: string;
 
   @IsNumberString()
   @Matches(/^(?=.*[1-9])\d+(\.\d{1,2})?$/)

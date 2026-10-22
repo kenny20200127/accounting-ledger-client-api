@@ -1,8 +1,11 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Controller, Get, Query, StreamableFile } from '@nestjs/common';
 import { FinancialReportQuery, ReportOptionsQuery } from './financial-report-query.dto';
 import { FinancialReportsService } from './financial-reports.service';
 import { ReportPdfService } from './report-pdf.service';
 // Global JWT and REPORTS.canView guards protect both previews and downloads.
+@ApiTags('reports/financial')
+@ApiBearerAuth()
 @Controller('reports/financial')
 export class FinancialReportsController {
   constructor(private readonly reports: FinancialReportsService, private readonly pdf: ReportPdfService) {}

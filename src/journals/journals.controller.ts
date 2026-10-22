@@ -1,8 +1,11 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
 import { Req, Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { JournalsService } from './journals.service';
 import { CreateJournalDto } from './dto/create-journal.dto';
 
+@ApiTags('journals')
+@ApiBearerAuth()
 @Controller('journals')
 export class JournalsController {
   constructor(private readonly service: JournalsService) {}

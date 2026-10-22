@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -11,6 +12,8 @@ import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { AccountListQueryDto } from './dto/account-list-query.dto';
 
+@ApiTags('accounts')
+@ApiBearerAuth()
 @Controller('accounts')
 export class AccountsController {
   constructor(private readonly service: AccountsService) {}

@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   Req, Body,
   Controller,
@@ -10,6 +11,8 @@ import {
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { ExpensesService } from './expenses.service';
 
+@ApiTags('expenses')
+@ApiBearerAuth()
 @Controller('expenses')
 export class ExpensesController {
   constructor(private readonly expensesService: ExpensesService) {}

@@ -6,10 +6,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, QueryFailedError, Repository } from 'typeorm';
-import { Account } from '../accounts/account.entity';
 import { Branch } from '../branches/branch.entity';
 import { Company } from '../companies/company.entity';
 import { postLedgerLines } from '../ledger/ledger-posting';
+import { assertPostableAccounts } from '../ledger/postable-accounts';
 import { JournalEntry } from '../journals/journal-entry.entity';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { Expense } from './expense.entity';
@@ -23,8 +23,6 @@ export class ExpensesService {
     private readonly companies: Repository<Company>,
     @InjectRepository(Branch)
     private readonly branches: Repository<Branch>,
-    @InjectRepository(Account)
-    private readonly accounts: Repository<Account>,
     @InjectRepository(JournalEntry)
     private readonly journals: Repository<JournalEntry>,
     private readonly dataSource: DataSource,
@@ -44,21 +42,6 @@ export class ExpensesService {
           'Branch must exist and belong to the selected company.',
         );
       }
-    }
-
-    const accountIds = [dto.expenseAccountId, dto.paymentAccountId].filter(
-      (accountId): accountId is string => Boolean(accountId),
-    );
-    const accounts = await this.accounts.findBy(
-      accountIds.map(accountId => ({ accountId })),
-    );
-    if (accounts.length !== new Set(accountIds).size) {
-      throw new BadRequestException('One or more expense accounts do not exist.');
-    }
-    if (accounts.some(account => account.companyId !== dto.companyId)) {
-      throw new BadRequestException(
-        'Expense accounts must belong to the selected company.',
-      );
     }
 
     if (dto.journalEntryId) {
@@ -85,7 +68,7 @@ export class ExpensesService {
       totalAmount,
       status: dto.status ?? 'DRAFT',
       branchId: dto.branchId ?? null,
-      paymentAccountId: dto.paymentAccountId ?? null,
+      paymentAccountId: dto.paymentAccountId,
       journalEntryId: dto.journalEntryId ?? null,
       createdBy: dto.createdBy ?? null,
     });
@@ -93,14 +76,16 @@ export class ExpensesService {
     try {
       return await this.dataSource.transaction(async (manager) => {
         const saved = await manager.getRepository(Expense).save(expense);
-        // Every expense posts to the ledger against its accounts: debit the
-        // expense account, credit the payment account when one is set.
+        // Debit the expense account, credit the payment account — both chosen
+        // from the chart of accounts, so the PV always posts two balanced lines.
+        await assertPostableAccounts(manager, saved.companyId, [
+          { label: 'Expense account', accountId: saved.expenseAccountId },
+          { label: 'Payment account', accountId: saved.paymentAccountId },
+        ]);
         const lines = [
           { accountId: saved.expenseAccountId, debit: saved.totalAmount, credit: '0.00', remarks: saved.description },
+          { accountId: saved.paymentAccountId, debit: '0.00', credit: saved.totalAmount, remarks: saved.description },
         ];
-        if (saved.paymentAccountId) {
-          lines.push({ accountId: saved.paymentAccountId, debit: '0.00', credit: saved.totalAmount, remarks: saved.description });
-        }
         await postLedgerLines(manager, {
           companyId: saved.companyId,
           branchId: saved.branchId,

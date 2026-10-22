@@ -50,12 +50,12 @@ export class Expense {
   @JoinColumn({ name: 'expense_account_id', referencedColumnName: 'accountId' })
   expenseAccount: Account;
 
-  @Column({ name: 'payment_account_id', type: 'uuid', nullable: true })
-  paymentAccountId: string | null;
+  @Column({ name: 'payment_account_id', type: 'uuid' })
+  paymentAccountId: string;
 
-  @ManyToOne(() => Account, { nullable: true, onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
+  @ManyToOne(() => Account, { onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
   @JoinColumn({ name: 'payment_account_id', referencedColumnName: 'accountId' })
-  paymentAccount: Account | null;
+  paymentAccount: Account;
 
   @Column({ type: 'numeric', precision: 20, scale: 2 })
   amount: string;

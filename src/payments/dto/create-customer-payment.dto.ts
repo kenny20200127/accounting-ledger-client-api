@@ -47,6 +47,14 @@ export class CreateCustomerPaymentDto {
   @IsUUID()
   bankAccountId?: string;
 
+  // Chart-of-accounts legs of the receipt voucher, chosen by the user so the
+  // ledger and history rows always have both a debit and a credit.
+  @IsUUID()
+  debitAccountId: string;
+
+  @IsUUID()
+  creditAccountId: string;
+
   @IsOptional()
   @IsUUID()
   journalEntryId?: string;

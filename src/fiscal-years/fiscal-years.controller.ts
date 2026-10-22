@@ -1,7 +1,10 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { CreateFiscalYearDto } from './dto/create-fiscal-year.dto';
 import { FiscalYearsService } from './fiscal-years.service';
 
+@ApiTags('fiscal-years')
+@ApiBearerAuth()
 @Controller('fiscal-years')
 export class FiscalYearsController {
   constructor(private readonly service: FiscalYearsService) {}

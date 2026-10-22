@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   Req, Body,
   Controller,
@@ -10,6 +11,8 @@ import {
 import { CreateCustomerPaymentDto } from './dto/create-customer-payment.dto';
 import { PaymentsService } from './payments.service';
 
+@ApiTags('customer-payments')
+@ApiBearerAuth()
 @Controller('customer-payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}

@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
     Body,
     Controller,
@@ -10,6 +11,8 @@ import {
 import { BranchesService } from './branches.service';
 import { CreateBranchDto } from './dto/create-branch.dto';
 
+@ApiTags('branches')
+@ApiBearerAuth()
 @Controller('branches')
 export class BranchesController {
     constructor(private readonly branchesService: BranchesService) { }

@@ -8,6 +8,7 @@ import {
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm';
+import { Account } from '../accounts/account.entity';
 import { Company } from '../companies/company.entity';
 import { Customer } from '../customers/customer.entity';
 import { Invoice } from '../invoices/invoice.entity';
@@ -58,6 +59,20 @@ export class CustomerPayment {
 
   @Column({ name: 'bank_account_id', type: 'uuid', nullable: true })
   bankAccountId: string | null;
+
+  @Column({ name: 'debit_account_id', type: 'uuid', nullable: true })
+  debitAccountId: string | null;
+
+  @ManyToOne(() => Account, { nullable: true, onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
+  @JoinColumn({ name: 'debit_account_id', referencedColumnName: 'accountId' })
+  debitAccount: Account | null;
+
+  @Column({ name: 'credit_account_id', type: 'uuid', nullable: true })
+  creditAccountId: string | null;
+
+  @ManyToOne(() => Account, { nullable: true, onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
+  @JoinColumn({ name: 'credit_account_id', referencedColumnName: 'accountId' })
+  creditAccount: Account | null;
 
   @Column({ name: 'journal_entry_id', type: 'uuid', nullable: true })
   journalEntryId: string | null;

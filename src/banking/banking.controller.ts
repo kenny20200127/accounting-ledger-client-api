@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
     Body,
     Controller,
@@ -12,6 +13,8 @@ import { BankingService } from './banking.service';
 import { CreateBankAccountDto } from './dto/create-bank-account.dto';
 import { CreateBankTransactionDto } from './dto/create-bank-transaction.dto';
 
+@ApiTags('banking/accounts')
+@ApiBearerAuth()
 @Controller('banking/accounts')
 export class BankingController {
     constructor(private readonly bankingService: BankingService) { }

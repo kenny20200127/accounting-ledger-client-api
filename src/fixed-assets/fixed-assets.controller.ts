@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -11,6 +12,8 @@ import { CreateAssetDepreciationDto } from './dto/create-asset-depreciation.dto'
 import { CreateFixedAssetDto } from './dto/create-fixed-asset.dto';
 import { FixedAssetsService } from './fixed-assets.service';
 
+@ApiTags('fixed-assets')
+@ApiBearerAuth()
 @Controller('fixed-assets')
 export class FixedAssetsController {
   constructor(private readonly fixedAssetsService: FixedAssetsService) {}

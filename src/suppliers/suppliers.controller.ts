@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
 import {
   Body,
@@ -11,6 +12,8 @@ import {
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { SuppliersService } from './suppliers.service';
 
+@ApiTags('suppliers')
+@ApiBearerAuth()
 @Controller('suppliers')
 export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}

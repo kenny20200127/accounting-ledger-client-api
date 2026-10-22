@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
 import {
   Req,
@@ -14,6 +15,8 @@ import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { InvoicePdfService } from './invoice-pdf.service';
 import { InvoicesService } from './invoices.service';
 
+@ApiTags('invoices')
+@ApiBearerAuth()
 @Controller('invoices')
 export class InvoicesController {
   constructor(

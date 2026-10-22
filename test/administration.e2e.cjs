@@ -55,10 +55,20 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
  const supplier=(await call('post','suppliers',b.token,{companyId:b.cid,supplierCode:'SUPPLIER',supplierName:'Supplier',payableAccountId:account('2000')}).expect(201)).body;
  const bank=(await call('post','banking/accounts',b.token,{companyId:b.cid,accountId:account('1000'),bankName:'Test Bank',accountName:'Operating'}).expect(201)).body;
  const tx=(await call('post','banking/accounts/'+bank.bankAccountId+'/transactions',b.token,{transactionDate:'2026-10-14',transactionType:'DEBIT',amount:'10.00'}).expect(201)).body;
- const expense=(await call('post','expenses',b.token,{companyId:b.cid,expenseNumber:'EXP-1',expenseDate:'2026-10-14',description:'Test expense',expenseAccountId:account('5000'),amount:'1.00'}).expect(201)).body;
+ const expense=(await call('post','expenses',b.token,{companyId:b.cid,expenseNumber:'EXP-1',expenseDate:'2026-10-14',description:'Test expense',expenseAccountId:account('5000'),paymentAccountId:account('1000'),amount:'1.00'}).expect(201)).body;
  const asset=(await call('post','fixed-assets',b.token,{companyId:b.cid,assetCode:'ASSET',assetName:'Test asset',purchaseDate:'2026-10-14',purchaseCost:'100.00',usefulLifeMonths:12,assetAccountId:account('1500'),depreciationAccountId:account('5900'),accumulatedDepreciationAccountId:account('1590')}).expect(201)).body;
  const invoice=(await call('post','invoices',b.token,{companyId:b.cid,customerId:customer.customerId,invoiceDate:'2026-10-14',lines:[{description:'Test item',quantity:'1',unitPrice:'10',revenueAccountId:account('4000')}]}).expect(201)).body;assert.match(invoice.invoiceNumber,/^INV-20261014-\d{4}$/);
- const payment=(await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',bankAccountId:bank.bankAccountId}).expect(201)).body;assert.match(payment.paymentNumber,/^PAY-20261014-\d{4}$/);
+ const payment=(await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',bankAccountId:bank.bankAccountId,debitAccountId:account('1000'),creditAccountId:account('1200')}).expect(201)).body;assert.match(payment.paymentNumber,/^PAY-20261014-\d{4}$/);
+ await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',debitAccountId:account('1000'),creditAccountId:account('1000')}).expect(400);
+ await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',debitAccountId:account('1000',accountsA),creditAccountId:account('1200')}).expect(403);
+ await call('post','expenses',b.token,{companyId:b.cid,expenseDate:'2026-10-14',description:'Missing credit account',expenseAccountId:account('5000'),amount:'1.00'}).expect(400);
+ const accountType=accountsB.find(x=>x.accountCode==='5000').accountTypeId;
+ const headerAcct=(await call('post','accounts',b.token,{companyId:b.cid,accountCode:'9900',accountName:'Summary only',accountTypeId:accountType,isHeader:true}).expect(201)).body;
+ const noPostAcct=(await call('post','accounts',b.token,{companyId:b.cid,accountCode:'9901',accountName:'Closed account',accountTypeId:accountType,allowPosting:false}).expect(201)).body;
+ const ledgerPayload=(debit,credit)=>({companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',debitAccountId:debit,creditAccountId:credit});
+ await call('post','customer-payments',b.token,ledgerPayload(headerAcct.accountId,account('1200'))).expect(400);
+ await call('post','customer-payments',b.token,ledgerPayload(account('1000'),noPostAcct.accountId)).expect(400);
+ await call('post','expenses',b.token,{companyId:b.cid,expenseDate:'2026-10-14',description:'Header credit',expenseAccountId:account('5000'),paymentAccountId:headerAcct.accountId,amount:'1.00'}).expect(400);
  await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentNumber:'PAY-1',paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00'}).expect(400);
  const journal=(await call('post','journals',b.token,{companyId:b.cid,branchId:b.branch.branchId,periodId:period.periodId,transactionDate:'2026-10-14',description:'Test revenue',lines:[{accountId:account('1000'),debitAmount:'12.34',creditAmount:'0.00'},{accountId:account('4000'),debitAmount:'0.00',creditAmount:'12.34'}]}).expect(201)).body;
  await t.test('all operational detail routes and nested actions reject foreign records',async()=>{
@@ -73,13 +83,19 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
  await t.test('payments and expenses post to the ledger against their accounts',async()=>{
   const histories=(await call('get','ledger-batches?companyId='+b.cid+'&limit=50',b.token).expect(200)).body;
   const pv=histories.items.filter(x=>x.docType==='PV'),rv=histories.items.filter(x=>x.docType==='RV');
-  assert.equal(pv.length,1);assert.equal(pv[0].debitAmount,'1.00');assert.equal(pv[0].docNo,'PV-20261014-0001');assert.equal(pv[0].refNo,'EXP-1');
+  const pvDr=pv.find(x=>x.debitAmount!=='0.00'),pvCr=pv.find(x=>x.creditAmount!=='0.00');
+  assert.equal(pv.length,2);assert.equal(pvDr.debitAmount,'1.00');assert.equal(pvCr.creditAmount,'1.00');
+  assert.equal(pvDr.docNo,'PV-20261014-0001');assert.equal(pvDr.refNo,'EXP-1');assert.equal(pvCr.docNo,'PV-20261014-0001');
   assert.equal(rv.length,2);assert.equal(new Set(rv.map(x=>x.docNo)).size,1);assert.match(rv[0].docNo,/^RV-20261014-\d{4}$/);
-  assert.equal(histories.total,3);
+  assert.equal(histories.total,4);
+  const cents=(v)=>BigInt(String(v ?? '0').replace('.',''));
+  const byDoc={};for(const h of histories.items){const d=(byDoc[h.docNo]??={dr:0n,cr:0n});d.dr+=cents(h.debitAmount);d.cr+=cents(h.creditAmount);}
+  for(const [docNo,d] of Object.entries(byDoc))assert.equal(d.dr-d.cr,0n,`${docNo} does not balance in ledger.histories`);
   const balances=(await call('get','ledger-batches/balances?companyId='+b.cid,b.token).expect(200)).body;
   const byCode=(code)=>balances.find((x)=>x.accountCode===code);
   assert.equal(byCode('5000').debitBalance,'1.00');
   assert.equal(byCode('1000').debitBalance,'1.00');
+  assert.equal(byCode('1000').creditBalance,'1.00');
   assert.equal(byCode('1200').creditBalance,'1.00');
  });
  await t.test('logos are normalized and branded financial PDFs render',async()=>{

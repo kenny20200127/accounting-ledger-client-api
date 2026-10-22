@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Controller, Get, Query } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
@@ -12,6 +13,8 @@ export class LegacyIssuesQuery extends LegacySummaryQuery {
 }
 // Global JwtAuthGuard and MenuAccessGuard require authenticated REPORTS.canView.
 // These endpoints expose counts and accounting issues, never raw source records.
+@ApiTags('reports/legacy-migration')
+@ApiBearerAuth()
 @Controller('reports/legacy-migration')
 export class LegacyReportsController {
   constructor(private readonly service: LegacyReportsService) {}

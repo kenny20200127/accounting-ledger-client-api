@@ -11,6 +11,7 @@ import { Company } from '../companies/company.entity';
 import { Customer } from '../customers/customer.entity';
 import { Invoice } from '../invoices/invoice.entity';
 import { postLedgerLines } from '../ledger/ledger-posting';
+import { assertPostableAccounts } from '../ledger/postable-accounts';
 import { JournalEntry } from '../journals/journal-entry.entity';
 import { CreateCustomerPaymentDto } from './dto/create-customer-payment.dto';
 import { CustomerPayment } from './customer-payment.entity';
@@ -127,20 +128,16 @@ export class PaymentsService {
           });
           const saved = await manager.getRepository(CustomerPayment).save(payment);
 
-          // Every payment posts to the ledger against its accounts: debit the
-          // receiving bank/cash account, credit the customer's receivable.
-          const lines: { accountId: string; debit: string; credit: string; remarks?: string | null }[] = [];
-          if (saved.bankAccountId) {
-            const bankAccount = await manager
-              .getRepository(BankAccount)
-              .findOne({ where: { bankAccountId: saved.bankAccountId } });
-            if (bankAccount) {
-              lines.push({ accountId: bankAccount.accountId, debit: saved.amount, credit: '0.00', remarks: saved.notes });
-            }
-          }
-          if (customer.receivableAccountId) {
-            lines.push({ accountId: customer.receivableAccountId, debit: '0.00', credit: saved.amount, remarks: saved.notes });
-          }
+          // Both legs come from the accounts chosen on the payment, so the RV
+          // always posts one debit and one matching credit to the ledger.
+          await assertPostableAccounts(manager, dto.companyId, [
+            { label: 'Debit account', accountId: dto.debitAccountId },
+            { label: 'Credit account', accountId: dto.creditAccountId },
+          ]);
+          const lines = [
+            { accountId: dto.debitAccountId, debit: saved.amount, credit: '0.00', remarks: saved.notes },
+            { accountId: dto.creditAccountId, debit: '0.00', credit: saved.amount, remarks: saved.notes },
+          ];
           await postLedgerLines(manager, {
             companyId: saved.companyId,
             branchId: null,

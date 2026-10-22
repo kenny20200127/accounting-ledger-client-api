@@ -1,3 +1,4 @@
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
 import {
   Req,
@@ -26,6 +27,8 @@ class TrialBalanceQueryDto {
   @IsDateString() asOf: string;
 }
 
+@ApiTags('ledger')
+@ApiBearerAuth()
 @Controller()
 export class LedgerController {
   constructor(private readonly service: LedgerService) {}
