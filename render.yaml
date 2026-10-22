@@ -1,0 +1,44 @@
+# Render blueprint for the accounting API. A service created by hand in the
+# dashboard does not adopt this file automatically — either recreate the service
+# as a Blueprint, or copy these settings and values across.
+services:
+  - type: web
+    name: accounting-ledger-api
+    runtime: node
+    # nest build over 138 files with the @nestjs/swagger AST transformer peaks
+    # above 512 MB, so Free/Starter instances die with a V8 heap OOM.
+    plan: standard
+    # Match the region of the Postgres server to keep query latency down.
+    region: oregon
+    branch: main
+    buildCommand: npm ci && npm run build && npm prune --omit=dev
+    startCommand: NODE_ENV=production node dist/main
+    # GET /api/v1 is not mapped (AppController is not registered in AppModule),
+    # so Render's health check uses the public menu route instead.
+    healthCheckPath: /api/v1/auth/menus/public
+    autoDeploy: true
+    envVars:
+      # Only raise the heap within the memory the instance actually has.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=1536
+      # Deliberately NOT setting NODE_ENV here: Render applies envVars to the
+      # build shell too, and npm ci with NODE_ENV=production skips the
+      # devDependencies that nest build needs. It is set in startCommand.
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: '5432'
+      - key: DB_USERNAME
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_DATABASE
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 8h
+      # Comma-separated list of deployed client origins, e.g.
+      # https://accounting-ledger-client.vercel.app
+      - key: CORS_ORIGINS
+        sync: false

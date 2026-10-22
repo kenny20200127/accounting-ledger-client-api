@@ -39,7 +39,22 @@ async function bootstrap() {
   );
 
   const config = app.get(ConfigService);
-  const port = config.get<number>('APP_PORT', 3000);
+  const port =
+    config.get<string>('APP_PORT') || config.get<string>('PORT') || 3000;
+
+  // Rendered clients call this API from another origin; local dev uses the Vite
+  // proxy and leaves CORS_ORIGINS unset.
+  const corsOrigins = (config.get<string>('CORS_ORIGINS', '') as string)
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (corsOrigins.length) {
+    app.enableCors({
+      origin: corsOrigins,
+      methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    });
+  }
 
   const docsEnabled =
     config.get<string>('SWAGGER_ENABLED') === 'true' ||
