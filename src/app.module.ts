@@ -1,8 +1,9 @@
 
-import { AdministrationModule } from './administration/administration.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+
+import { AdministrationModule } from './administration/administration.module';
 import { CompaniesModule } from './companies/companies.module';
 import { BranchesModule } from './branches/branches.module';
 import { UsersModule } from './users/users.module';
@@ -32,59 +33,59 @@ import { AuthModule } from './auth/auth.module';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres' as const,
-        host: config.get<string>('DB_HOST'),
-        port: config.get<number>('DB_PORT', 5432),
-        username: config.get<string>('DB_USERNAME'),
-        password: config.get<string>('DB_PASSWORD'),
-        database: config.get<string>('DB_DATABASE'),
+      useFactory: (config: ConfigService) => {
+        const host = config.getOrThrow<string>('DB_HOST');
+        const username = config.getOrThrow<string>('DB_USERNAME');
+        const password = config.getOrThrow<string>('DB_PASSWORD');
+        const database = config.getOrThrow<string>('DB_DATABASE');
 
-        autoLoadEntities: true,
-        synchronize: false,
-      }),
+        const port = Number(config.get<string>('DB_PORT') ?? 5432);
+
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          throw new Error('DB_PORT must be a valid port number.');
+        }
+
+        const sslEnabled =
+          config.get<string>('DB_SSL')?.toLowerCase() === 'true';
+
+        return {
+          type: 'postgres' as const,
+          host,
+          port,
+          username,
+          password,
+          database,
+
+          ssl: sslEnabled
+            ? { rejectUnauthorized: false }
+            : false,
+
+          autoLoadEntities: true,
+          synchronize: false,
+        };
+      },
     }),
 
     AdministrationModule,
     CompaniesModule,
-
     BranchesModule,
-
     UsersModule,
-
     RolesModule,
-
     FiscalYearsModule,
-
     AccountingPeriodsModule,
-
     AccountsModule,
-
     JournalsModule,
-
     LedgerModule,
-
     CustomersModule,
-
     SuppliersModule,
-
     InvoicesModule,
-
     PaymentsModule,
-
     BankingModule,
-
     ExpensesModule,
-
     FixedAssetsModule,
-
     ReportsModule,
-
     AuditModule,
-
     AuthModule,
   ],
 })
 export class AppModule { }
-
-// update
