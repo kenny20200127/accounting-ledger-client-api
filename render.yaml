@@ -11,7 +11,11 @@ services:
     # Match the region of the Postgres server to keep query latency down.
     region: oregon
     branch: main
-    buildCommand: npm ci && npm run build && npm prune --omit=dev
+    # Invoice and report PDFs are rendered by scripts/*.py through a spawned
+    # Python process, so the runtime needs reportlab too. Render copies the
+    # project directory from build to runtime but not system site-packages, so
+    # the dependency is installed into vendor/python inside the project.
+    buildCommand: npm ci && npm run build && npm prune --omit=dev && python3 -m pip install --no-cache-dir --target vendor/python -r scripts/requirements-pdf.txt
     startCommand: NODE_ENV=production node dist/main
     # GET /api/v1 is not mapped (AppController is not registered in AppModule),
     # so Render's health check uses the public menu route instead.
@@ -21,6 +25,12 @@ services:
       # Only raise the heap within the memory the instance actually has.
       - key: NODE_OPTIONS
         value: --max-old-space-size=1536
+      # The service defaults to an executable named "python", which Render's
+      # Node image does not provide; reportlab comes from vendor/python.
+      - key: REPORT_PDF_PYTHON
+        value: python3
+      - key: PYTHONPATH
+        value: /opt/render/project/src/vendor/python
       # Deliberately NOT setting NODE_ENV here: Render applies envVars to the
       # build shell too, and npm ci with NODE_ENV=production skips the
       # devDependencies that nest build needs. It is set in startCommand.
