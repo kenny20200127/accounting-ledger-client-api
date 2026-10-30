@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,6 +14,7 @@ import { User } from '../users/user.entity';
 import { DataSource } from 'typeorm';
 import { TenantAccessService } from '../administration/tenant-access.service';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 @Injectable()
 export class AuthService {
@@ -26,18 +28,20 @@ export class AuthService {
     private readonly ds: DataSource,
   ) {}
 
-  async login(dto: LoginDto, portal: 'platform' | 'company' = 'company') {
-    const identifier = dto.identifier.trim().toLowerCase();
-    const user = await this.users
+  private findByIdentifier(identifier: string) {
+    return this.users
       .createQueryBuilder('user')
       .addSelect('user.passwordHash')
       .where(
         'LOWER(user.username) = :identifier OR LOWER(user.email) = :identifier',
-        {
-          identifier,
-        },
+        { identifier },
       )
       .getOne();
+  }
+
+  async login(dto: LoginDto, portal: 'platform' | 'company' = 'company') {
+    const identifier = dto.identifier.trim().toLowerCase();
+    const user = await this.findByIdentifier(identifier);
 
     if (
       !user ||
@@ -97,6 +101,32 @@ export class AuthService {
       },
       menus,
     };
+  }
+
+  /**
+   * Self-service reset. Until email verification exists, proving the username
+   * (or email) is the only credential checked, so this is deliberately scoped
+   * to the portal the account signs in to.
+   */
+  async forgotPassword(dto: ForgotPasswordDto, portal: 'platform' | 'company') {
+    const user = await this.findByIdentifier(
+      dto.identifier.trim().toLowerCase(),
+    );
+
+    if (!user || !user.isActive || user.deletedAt !== null)
+      throw new NotFoundException('No active account matches that username.');
+
+    if ((portal === 'platform') !== user.isPlatformAdmin)
+      throw new ForbiddenException(
+        portal === 'platform'
+          ? 'Use the company application to reset this password.'
+          : 'Use the platform application to reset this password.',
+      );
+
+    user.passwordHash = await bcrypt.hash(dto.newPassword, 12);
+    user.authVersion++;
+    await this.users.save(user);
+    return { passwordReset: true };
   }
 
   async getUserMenus(userId: string) {

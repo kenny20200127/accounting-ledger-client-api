@@ -1,6 +1,7 @@
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { AuthService } from './auth.service';
 import { Public } from './public.decorator';
 
@@ -27,15 +28,25 @@ export class AuthController {
     return this.auth.login(dto, 'platform');
   }
 
-  @ApiBearerAuth()
+  @Public()
+  @Post('company/forgot-password')
+  companyForgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.auth.forgotPassword(dto, 'company');
+  }
 
+  @Public()
+  @Post('platform/forgot-password')
+  platformForgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.auth.forgotPassword(dto, 'platform');
+  }
+
+  @ApiBearerAuth()
   @Get('me')
   me(@Req() request: { user: { sub: string } }) {
     return this.auth.getProfile(request.user.sub);
   }
 
   @ApiBearerAuth()
-
   @Get('menus')
   menus(@Req() request: { user: { sub: string } }) {
     return this.auth.getUserMenus(request.user.sub);
