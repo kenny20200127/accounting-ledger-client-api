@@ -11,11 +11,9 @@ services:
     # Match the region of the Postgres server to keep query latency down.
     region: oregon
     branch: main
-    # Invoice and report PDFs are rendered by scripts/*.py through a spawned
-    # Python process, so the runtime needs reportlab too. Render copies the
-    # project directory from build to runtime but not system site-packages, so
-    # the dependency is installed into vendor/python inside the project.
-    buildCommand: npm ci && npm run build && npm prune --omit=dev && python3 -m pip install --no-cache-dir --target vendor/python -r scripts/requirements-pdf.txt
+    # scripts/install-pdf-deps.cjs runs as npm postinstall and puts reportlab in
+    # vendor/python, which is copied to the runtime with the rest of the project.
+    buildCommand: npm ci && npm run build && npm prune --omit=dev
     startCommand: NODE_ENV=production node dist/main
     # GET /api/v1 is not mapped (AppController is not registered in AppModule),
     # so Render's health check uses the public menu route instead.
