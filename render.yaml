@@ -25,12 +25,10 @@ services:
       # Only raise the heap within the memory the instance actually has.
       - key: NODE_OPTIONS
         value: --max-old-space-size=1536
-      # The service defaults to an executable named "python", which Render's
-      # Node image does not provide; reportlab comes from vendor/python.
+      # Linux images provide python3, not python. vendor/python is added to
+      # PYTHONPATH by the API itself, relative to where it runs.
       - key: REPORT_PDF_PYTHON
         value: python3
-      - key: PYTHONPATH
-        value: /opt/render/project/src/vendor/python
       # Deliberately NOT setting NODE_ENV here: Render applies envVars to the
       # build shell too, and npm ci with NODE_ENV=production skips the
       # devDependencies that nest build needs. It is set in startCommand.
