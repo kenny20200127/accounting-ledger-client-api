@@ -47,26 +47,46 @@ async function seedDemoData() {
     );
 
     // 4. Accounts
-    const types = await client.query("SELECT account_type_id, code FROM accounting.account_types");
+    const types = await client.query("SELECT account_type_id, code, code_prefix FROM accounting.account_types");
     const typeMap = {};
-    types.rows.forEach(t => { typeMap[t.code] = t.account_type_id; });
+    const prefixMap = {};
+    types.rows.forEach(t => { typeMap[t.code] = t.account_type_id; prefixMap[t.code] = t.code_prefix; });
+    const subtype = await client.query("SELECT account_subtype_id FROM accounting.account_subtypes WHERE code = 'GL_ACCOUNT'");
+    const subtypeId = subtype.rows[0]?.account_subtype_id;
 
     const accountsToSeed = [
-      { code: '1010', name: 'Main Operating Bank Account', type: typeMap['ASSET'] },
-      { code: '1020', name: 'Accounts Receivable (Trade)', type: typeMap['ASSET'] },
-      { code: '2010', name: 'Accounts Payable (Trade)', type: typeMap['LIABILITY'] },
-      { code: '3010', name: 'Retained Earnings', type: typeMap['EQUITY'] },
-      { code: '4010', name: 'Software & Consulting Revenue', type: typeMap['REVENUE'] },
-      { code: '5010', name: 'Cloud Infrastructure & Hosting', type: typeMap['EXPENSE'] },
-      { code: '5020', name: 'General & Administrative Expenses', type: typeMap['EXPENSE'] },
+      { code: '1010', name: 'Main Operating Bank Account', type: 'ASSET' },
+      { code: '1020', name: 'Accounts Receivable (Trade)', type: 'ASSET' },
+      { code: '2010', name: 'Accounts Payable (Trade)', type: 'LIABILITY' },
+      { code: '3010', name: 'Retained Earnings', type: 'EQUITY' },
+      { code: '4010', name: 'Software & Consulting Revenue', type: 'REVENUE' },
+      { code: '5010', name: 'Cloud Infrastructure & Hosting', type: 'EXPENSE' },
+      { code: '5020', name: 'General & Administrative Expenses', type: 'EXPENSE' },
     ];
 
+    const bsCache = {};
+    const typeSeq = {};
     const accMap = {};
     for (const a of accountsToSeed) {
-      if (!a.type) continue;
+      if (!typeMap[a.type] || !subtypeId) continue;
+      const prefix = prefixMap[a.type];
+      if (!bsCache[a.type]) {
+        const bs = await client.query(
+          "INSERT INTO accounting.balance_sheet_classifications (company_id, account_type_id, code, description) VALUES ($1, $2, $3, $4) ON CONFLICT (company_id, code) DO UPDATE SET description = EXCLUDED.description RETURNING balance_sheet_id",
+          [companyId, typeMap[a.type], prefix + '01', a.type + ' classification']
+        );
+        bsCache[a.type] = bs.rows[0].balance_sheet_id;
+      }
+      const index = typeSeq[a.type] = (typeSeq[a.type] ?? -1) + 1;
+      const mainCode = String(Number(prefix) * 10000 + index);
+      const main = await client.query(
+        "INSERT INTO accounting.main_accounts (company_id, account_type_id, balance_sheet_id, account_subtype_id, main_code, description) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (company_id, main_code) DO UPDATE SET description = EXCLUDED.description RETURNING main_account_id",
+        [companyId, typeMap[a.type], bsCache[a.type], subtypeId, mainCode, a.name]
+      );
+      const accountCode = `${mainCode}-00001`;
       const res = await client.query(
-        "INSERT INTO accounting.accounts (company_id, account_code, account_name, account_type_id, allow_posting, is_active) VALUES ($1, $2, $3, $4, TRUE, TRUE) ON CONFLICT (company_id, account_code) DO UPDATE SET account_name = EXCLUDED.account_name RETURNING account_id",
-        [companyId, a.code, a.name, a.type]
+        "INSERT INTO accounting.accounts (company_id, main_account_id, account_code, account_name, account_type_id, allow_posting, is_active) VALUES ($1, $2, $3, $4, $5, TRUE, TRUE) ON CONFLICT (company_id, account_code) DO UPDATE SET account_name = EXCLUDED.account_name, main_account_id = EXCLUDED.main_account_id RETURNING account_id",
+        [companyId, main.rows[0].main_account_id, accountCode, a.name, typeMap[a.type]]
       );
       accMap[a.code] = res.rows[0].account_id;
     }

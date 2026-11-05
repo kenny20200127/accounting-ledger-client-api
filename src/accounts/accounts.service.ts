@@ -1,71 +1,96 @@
 import { findCompanyList } from '../common/find-company-list';
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, Repository } from 'typeorm';
+import { DataSource, FindOptionsWhere, Repository } from 'typeorm';
 import { Account } from './account.entity';
-import { AccountType } from './account-type.entity';
-import { AccountCategory } from './account-category.entity';
-import { Company } from '../companies/company.entity';
-import { CreateAccountDto } from './dto/create-account.dto';
+import { isUniqueViolation, nextChartAccountCode } from './account-codes';
 import { AccountListQueryDto } from './dto/account-list-query.dto';
+import { CreateAccountDto } from './dto/create-account.dto';
+import { MainAccount } from './main-account.entity';
 
 @Injectable()
 export class AccountsService {
   constructor(
     @InjectRepository(Account) private readonly accounts: Repository<Account>,
-    @InjectRepository(AccountType)
-    private readonly types: Repository<AccountType>,
-    @InjectRepository(AccountCategory)
-    private readonly categories: Repository<AccountCategory>,
-    @InjectRepository(Company) private readonly companies: Repository<Company>,
+    @InjectRepository(MainAccount)
+    private readonly mainAccounts: Repository<MainAccount>,
+    private readonly dataSource: DataSource,
   ) {}
 
-  async create(dto: CreateAccountDto): Promise<Account> {
-    if (
-      !(await this.companies.exists({ where: { companyId: dto.companyId } }))
-    ) {
-      throw new BadRequestException('Company does not exist.');
-    }
-    if (
-      !(await this.types.exists({
-        where: { accountTypeId: dto.accountTypeId },
-      }))
-    ) {
+  async create(dto: CreateAccountDto, createdBy?: string): Promise<Account> {
+    if (dto.accountCode?.trim())
       throw new BadRequestException(
-        'Account type does not exist. Seed account types first.',
+        'Account codes are generated automatically and cannot be set manually.',
       );
-    }
-    if (dto.accountCategoryId) {
-      const category = await this.categories.findOne({
-        where: { accountCategoryId: dto.accountCategoryId },
-      });
-      if (!category || category.accountTypeId !== dto.accountTypeId) {
-        throw new BadRequestException(
-          'Account category must belong to the selected account type.',
-        );
-      }
-    }
+    const main = await this.mainAccounts.findOne({
+      where: { mainAccountId: dto.mainAccountId },
+    });
+    if (!main) throw new BadRequestException('Main account does not exist.');
+    if (main.companyId !== dto.companyId)
+      throw new BadRequestException(
+        'Main account must belong to the same company.',
+      );
     if (dto.parentAccountId) {
       const parent = await this.accounts.findOne({
-        where: { accountId: dto.parentAccountId },
+        where: { accountId: dto.parentAccountId, companyId: dto.companyId },
       });
-      if (!parent || parent.companyId !== dto.companyId) {
+      if (!parent)
         throw new BadRequestException(
           'Parent account must belong to the same company.',
         );
+    }
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.dataSource.transaction(async (manager) => {
+          const accountCode = await nextChartAccountCode(
+            manager,
+            main.mainAccountId,
+            main.mainCode,
+          );
+          const repo = manager.getRepository(Account);
+          return repo.save(
+            repo.create({
+              companyId: dto.companyId,
+              mainAccountId: main.mainAccountId,
+              accountTypeId: main.accountTypeId,
+              parentAccountId: dto.parentAccountId ?? null,
+              accountCode,
+              accountName: dto.accountName.trim(),
+              description: dto.description?.trim() || null,
+              email: dto.email?.trim().toLowerCase() || null,
+              isHeader: dto.isHeader ?? false,
+              isControlAccount: dto.isControlAccount ?? false,
+              allowPosting: dto.allowPosting ?? true,
+              createdBy: createdBy ?? null,
+            }),
+          );
+        });
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          if (attempt >= 4)
+            throw new ConflictException(
+              'Unable to allocate a unique account code. Please retry.',
+            );
+          continue;
+        }
+        throw error;
       }
     }
-    return this.accounts.save(this.accounts.create(dto));
   }
 
   findAll(query: AccountListQueryDto) {
     const extraWhere: FindOptionsWhere<Account> = {};
     if (query.type) {
       extraWhere.accountType = { code: query.type };
+    }
+    if (query.mainAccountId) {
+      extraWhere.mainAccountId = query.mainAccountId;
     }
     if (query.postable === 'true') {
       Object.assign(extraWhere, {
@@ -78,7 +103,14 @@ export class AccountsService {
       this.accounts,
       query,
       {
-        relations: { accountType: true },
+        relations: {
+          accountType: true,
+          mainAccount: {
+            accountType: true,
+            balanceSheet: true,
+            accountSubtype: true,
+          },
+        },
         order: { accountCode: 'ASC', accountId: 'ASC' },
       },
       ['accountCode', 'accountName'],
@@ -89,7 +121,14 @@ export class AccountsService {
   async findOne(id: string): Promise<Account> {
     const account = await this.accounts.findOne({
       where: { accountId: id },
-      relations: { accountType: true },
+      relations: {
+        accountType: true,
+        mainAccount: {
+          accountType: true,
+          balanceSheet: true,
+          accountSubtype: true,
+        },
+      },
     });
     if (!account) throw new NotFoundException('Account not found.');
     return account;

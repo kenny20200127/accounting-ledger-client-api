@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { CreateAccountDto } from './dto/create-account.dto';
@@ -19,8 +20,8 @@ export class AccountsController {
   constructor(private readonly service: AccountsService) {}
 
   @Post()
-  create(@Body() dto: CreateAccountDto) {
-    return this.service.create(dto);
+  create(@Body() dto: CreateAccountDto, @Req() req: any) {
+    return this.service.create(dto, req.actor?.userId);
   }
 
   @Get()

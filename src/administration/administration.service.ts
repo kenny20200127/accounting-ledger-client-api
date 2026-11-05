@@ -15,7 +15,7 @@ import { User } from '../users/user.entity';
 import { Role } from '../roles/role.entity';
 import { FiscalYear } from '../fiscal-years/fiscal-year.entity';
 import { AccountingPeriod } from '../accounting-periods/accounting-period.entity';
-import { Account } from '../accounts/account.entity';
+import { nextMainAccountCode } from '../accounts/account-codes';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { Actor, TenantAccessService } from './tenant-access.service';
 import {
@@ -169,11 +169,36 @@ export class AdministrationService {
             }),
           );
         if (seedStandardAccounts !== false) {
-          const types = await m.query(
-            'SELECT account_type_id,code FROM accounting.account_types',
+          const types: {
+            account_type_id: string;
+            code: string;
+            code_prefix: string;
+            name: string;
+          }[] = await m.query(
+            'SELECT account_type_id,code,code_prefix,name FROM accounting.account_types ORDER BY code_prefix',
           );
-          const ids = new Map(types.map((t) => [t.code, t.account_type_id]));
-          for (const [code, name, type] of [
+          const [subtype] = await m.query(
+            "SELECT account_subtype_id FROM accounting.account_subtypes WHERE code='GL_ACCOUNT'",
+          );
+          if (!subtype) throw new BadRequestException('Missing GL account subtype.');
+          const byCode = new Map(types.map((type) => [type.code, type]));
+          const balanceSheets = new Map<string, string>();
+          for (const type of types) {
+            const [row] = await m.query(
+              `INSERT INTO accounting.balance_sheet_classifications
+                (company_id,account_type_id,code,description,created_by)
+               VALUES($1,$2,$3,$4,$5) RETURNING balance_sheet_id`,
+              [
+                cid,
+                type.account_type_id,
+                type.code_prefix + '01',
+                type.name,
+                actor.userId,
+              ],
+            );
+            balanceSheets.set(type.code, row.balance_sheet_id);
+          }
+          for (const [code, name, typeCode] of [
             ['1000', 'Bank and Cash', 'ASSET'],
             ['1200', 'Trade Receivables', 'ASSET'],
             ['1500', 'Fixed Assets', 'ASSET'],
@@ -184,16 +209,42 @@ export class AdministrationService {
             ['5000', 'Operating Expenses', 'EXPENSE'],
             ['5900', 'Depreciation Expense', 'EXPENSE'],
           ]) {
-            if (!ids.get(type))
-              throw new BadRequestException('Missing account type ' + type);
-            await m.getRepository(Account).save(
-              m.getRepository(Account).create({
-                companyId: cid,
-                accountCode: code,
-                accountName: name,
-                accountTypeId: ids.get(type) as string,
-                isControlAccount: ['1200', '2000'].includes(code),
-              }),
+            const type = byCode.get(typeCode);
+            if (!type)
+              throw new BadRequestException('Missing account type ' + typeCode);
+            const mainCode = await nextMainAccountCode(
+              m,
+              cid,
+              type.account_type_id,
+              type.code_prefix,
+            );
+            const [main] = await m.query(
+              `INSERT INTO accounting.main_accounts
+                (company_id,account_type_id,balance_sheet_id,account_subtype_id,main_code,description,short_name,created_by)
+               VALUES($1,$2,$3,$4,$5,$6,$6,$7) RETURNING main_account_id`,
+              [
+                cid,
+                type.account_type_id,
+                balanceSheets.get(typeCode),
+                subtype.account_subtype_id,
+                mainCode,
+                name,
+                actor.userId,
+              ],
+            );
+            await m.query(
+              `INSERT INTO accounting.accounts
+                (company_id,account_type_id,main_account_id,account_code,account_name,is_control_account,created_by)
+               VALUES($1,$2,$3,$4,$5,$6,$7)`,
+              [
+                cid,
+                type.account_type_id,
+                main.main_account_id,
+                code,
+                name,
+                ['1200', '2000'].includes(code),
+                actor.userId,
+              ],
             );
           }
         }

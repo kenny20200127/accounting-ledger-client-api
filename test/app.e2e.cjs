@@ -71,11 +71,14 @@ test('trial balance excludes draft/future entries; ledger carries signed opening
   try {
     const cid=randomUUID(), fy=randomUUID(), period=randomUUID(), a=randomUUID(), b=randomUUID();
     await runner.query('INSERT INTO core.companies(company_id,company_code,company_name) VALUES($1,$2,$3)',[cid,'TEST-'+cid,'Temporary verification']);
-    const [type]=await runner.query("SELECT account_type_id FROM accounting.account_types WHERE code='ASSET'");
+    const [type]=await runner.query("SELECT account_type_id,code_prefix FROM accounting.account_types WHERE code='ASSET'");
+    const [subtype]=await runner.query("SELECT account_subtype_id FROM accounting.account_subtypes WHERE code='GL_ACCOUNT'");
     await runner.query('INSERT INTO accounting.fiscal_years(fiscal_year_id,company_id,year_name,start_date,end_date) VALUES($1,$2,$3,$4,$5)',[fy,cid,'TEST 2026','2026-01-01','2026-12-31']);
     await runner.query('INSERT INTO accounting.accounting_periods(period_id,fiscal_year_id,period_number,period_name,start_date,end_date) VALUES($1,$2,1,$3,$4,$5)',[period,fy,'Test period','2026-01-01','2026-12-31']);
+    const [bs]=await runner.query(`INSERT INTO accounting.balance_sheet_classifications(company_id,account_type_id,code,description) VALUES($1,$2,$3,'Assets') RETURNING balance_sheet_id`,[cid,type.account_type_id,type.code_prefix+'01']);
+    const [main]=await runner.query(`INSERT INTO accounting.main_accounts(company_id,account_type_id,balance_sheet_id,account_subtype_id,main_code,description) VALUES($1,$2,$3,$4,$5,'Assets') RETURNING main_account_id`,[cid,type.account_type_id,bs.balance_sheet_id,subtype.account_subtype_id,type.code_prefix+'0000']);
     for(const [id,code] of [[a,'A'],[b,'B']]) {
-      await runner.query('INSERT INTO accounting.accounts(account_id,company_id,account_code,account_name,account_type_id) VALUES($1,$2,$3,$3,$4)',[id,cid,code,type.account_type_id]);
+      await runner.query('INSERT INTO accounting.accounts(account_id,company_id,main_account_id,account_code,account_name,account_type_id) VALUES($1,$2,$5,$3,$3,$4)',[id,cid,code,type.account_type_id,main.main_account_id]);
     }
     for(const [status,day,debit,credit] of [
       ['DRAFT','2026-01-01','100.00','0.00'], ['POSTED','2026-01-02','2.00','0.00'],
@@ -162,9 +165,12 @@ test('pagination treats LIKE wildcards literally and counts matches across all p
   try {
     const cid=randomUUID();
     await runner.query('INSERT INTO core.companies(company_id,company_code,company_name) VALUES($1,$2,$3)',[cid,'PAGING-'+cid,'Temporary paging fixture']);
-    const [type]=await runner.query("SELECT account_type_id FROM accounting.account_types WHERE code='ASSET'");
+    const [type]=await runner.query("SELECT account_type_id,code_prefix FROM accounting.account_types WHERE code='ASSET'");
+    const [subtype]=await runner.query("SELECT account_subtype_id FROM accounting.account_subtypes WHERE code='GL_ACCOUNT'");
+    const [bs]=await runner.query(`INSERT INTO accounting.balance_sheet_classifications(company_id,account_type_id,code,description) VALUES($1,$2,$3,'Assets') RETURNING balance_sheet_id`,[cid,type.account_type_id,type.code_prefix+'01']);
+    const [main]=await runner.query(`INSERT INTO accounting.main_accounts(company_id,account_type_id,balance_sheet_id,account_subtype_id,main_code,description) VALUES($1,$2,$3,$4,$5,'Assets') RETURNING main_account_id`,[cid,type.account_type_id,bs.balance_sheet_id,subtype.account_subtype_id,type.code_prefix+'0000']);
     for(const code of ['A01','A02','A03','A04','A05','A%_06']) {
-      await runner.query('INSERT INTO accounting.accounts(company_id,account_code,account_name,account_type_id) VALUES($1,$2,$3,$4)',[cid,code,'Same name',type.account_type_id]);
+      await runner.query('INSERT INTO accounting.accounts(company_id,main_account_id,account_code,account_name,account_type_id) VALUES($1,$2,$3,$4,$5)',[cid,main.main_account_id,code,'Same name',type.account_type_id]);
     }
     const repo=runner.manager.getRepository(Account);
     const options={order:{accountCode:'ASC',accountId:'ASC'},relations:{accountType:true}};
@@ -230,15 +236,20 @@ test('financial reports compute month, fiscal-year, closing balances, net profit
       await runner.query('INSERT INTO accounting.fiscal_years(fiscal_year_id,company_id,year_name,start_date,end_date) VALUES($1,$2,$3,$4,$5)',[id,cid,'FY '+year,year+'-01-01',year+'-12-31']);
       await runner.query('INSERT INTO accounting.accounting_periods(period_id,fiscal_year_id,period_number,period_name,start_date,end_date) VALUES($1,$2,1,$3,$4,$5)',[pid,id,'Fixture '+year,year+'-01-01',year+'-12-31']);
     }
-    const typeRows=await runner.query('SELECT code,account_type_id FROM accounting.account_types');
-    const types=Object.fromEntries(typeRows.map(r=>[r.code,r.account_type_id]));
+    const typeRows=await runner.query('SELECT code,account_type_id,code_prefix FROM accounting.account_types');
+    const types=Object.fromEntries(typeRows.map(r=>[r.code,r]));
+    const [subtype]=await runner.query("SELECT account_subtype_id FROM accounting.account_subtypes WHERE code='GL_ACCOUNT'");
     const accounts={};
     for(const [group,name,type] of [['156000','Bank balances','ASSET'],['410000','Commission income','REVENUE'],['512000','Operating expense','EXPENSE'],['310000','Capital','EQUITY']]) {
+      const [bs]=await runner.query(`INSERT INTO accounting.balance_sheet_classifications(company_id,account_type_id,code,description)
+        VALUES($1,$2,$3,$4) RETURNING balance_sheet_id`,[cid,types[type].account_type_id,types[type].code_prefix+'01',name+' classification']);
+      const [main]=await runner.query(`INSERT INTO accounting.main_accounts(company_id,account_type_id,balance_sheet_id,account_subtype_id,main_code,description)
+        VALUES($1,$2,$3,$4,$5,$6) RETURNING main_account_id`,[cid,types[type].account_type_id,bs.balance_sheet_id,subtype.account_subtype_id,group,name]);
       const header=randomUUID(),detail=randomUUID();accounts[group]=detail;
-      await runner.query(`INSERT INTO accounting.accounts(account_id,company_id,account_code,account_name,account_type_id,is_header,allow_posting)
-        VALUES($1,$2,$3,$4,$5,TRUE,FALSE)`,[header,cid,group+'-00000',name,types[type]]);
-      await runner.query(`INSERT INTO accounting.accounts(account_id,company_id,parent_account_id,account_code,account_name,account_type_id)
-        VALUES($1,$2,$3,$4,$5,$6)`,[detail,cid,header,group+'-00001',name+' detail',types[type]]);
+      await runner.query(`INSERT INTO accounting.accounts(account_id,company_id,main_account_id,account_code,account_name,account_type_id,is_header,allow_posting)
+        VALUES($1,$2,$6,$3,$4,$5,TRUE,FALSE)`,[header,cid,group+'-00000',name,types[type].account_type_id,main.main_account_id]);
+      await runner.query(`INSERT INTO accounting.accounts(account_id,company_id,main_account_id,parent_account_id,account_code,account_name,account_type_id)
+        VALUES($1,$2,$6,$3,$4,$5,$7)`,[detail,cid,header,group+'-00001',name+' detail',main.main_account_id,types[type].account_type_id]);
     }
     async function journal(day,status,debitGroup,creditGroup,value,branch=branchA) {
       const id=randomUUID();

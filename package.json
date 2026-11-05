@@ -25,7 +25,8 @@
     "verify:old-account": "node scripts/verify-old-account.cjs",
     "setup:pdf": "python -m pip install -r scripts/requirements-pdf.txt",
     "migrate:company-tenancy": "node scripts/migrate-company-tenancy.cjs",
-    "migrate:error-logs": "node scripts/migrate-error-logs.cjs"
+    "migrate:error-logs": "node scripts/migrate-error-logs.cjs",
+    "migrate:charts": "node scripts/migrate-chart-of-accounts.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

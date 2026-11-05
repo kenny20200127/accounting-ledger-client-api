@@ -2,6 +2,7 @@ import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, Primary
 import { Company } from '../companies/company.entity';
 import { AccountCategory } from './account-category.entity';
 import { AccountType } from './account-type.entity';
+import { MainAccount } from './main-account.entity';
 
 @Entity({ schema: 'accounting', name: 'accounts' })
 @Index('uq_company_account_code', ['companyId', 'accountCode'], { unique: true })
@@ -39,6 +40,13 @@ export class Account {
   @JoinColumn({ name: 'account_category_id', referencedColumnName: 'accountCategoryId' })
   accountCategory?: AccountCategory | null;
 
+  @Column({ name: 'main_account_id', type: 'uuid' })
+  mainAccountId: string;
+
+  @ManyToOne(() => MainAccount, { onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
+  @JoinColumn({ name: 'main_account_id', referencedColumnName: 'mainAccountId' })
+  mainAccount: MainAccount;
+
   @Column({ name: 'account_code', type: 'varchar', length: 50 })
   accountCode: string;
 
@@ -47,6 +55,12 @@ export class Account {
 
   @Column({ type: 'text', nullable: true })
   description?: string | null;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  email?: string | null;
+
+  @Column({ name: 'created_by', type: 'uuid', nullable: true })
+  createdBy?: string | null;
 
   @Column({ name: 'is_header', type: 'boolean', default: false })
   isHeader: boolean;

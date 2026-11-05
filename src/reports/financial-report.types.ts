@@ -24,5 +24,5 @@ export function amount(value: bigint): string {
   return `${sign}${magnitude / 100n}.${String(magnitude % 100n).padStart(2, '0')}`;
 }
 export function groupCode(account: { accountCode: string; parentCode?: string | null }): string {
-  return /^\d{6}-\d{5}$/.test(account.accountCode) ? account.accountCode.split('-')[0] : account.parentCode || account.accountCode;
+  return /^\d{5,6}-\d{5}$/.test(account.accountCode) ? account.accountCode.split('-')[0] : account.parentCode || account.accountCode;
 }

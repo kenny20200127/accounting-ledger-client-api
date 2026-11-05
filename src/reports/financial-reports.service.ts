@@ -6,7 +6,7 @@ import { amount, cents, FinancialReport, groupCode, ReportRow } from './financia
 
 type AccountBalance = {
   accountCode: string; accountName: string; accountType: string; isHeader: boolean;
-  parentCode: string | null; month: string; ytd: string; closing: string; activity: number; monthActivity: number;
+  parentCode: string | null; mainDescription: string | null; month: string; ytd: string; closing: string; activity: number; monthActivity: number;
 };
 @Injectable()
 export class FinancialReportsService {
@@ -22,15 +22,17 @@ export class FinancialReportsService {
   async options(companyId: string) {
     const company = await this.company(companyId);
     const accounts = await this.dataSource.query(`SELECT a.account_code AS "accountCode", a.account_name AS "accountName",
-      a.is_header AS "isHeader", p.account_code AS "parentCode", p.account_name AS "parentName"
+      a.is_header AS "isHeader", p.account_code AS "parentCode", p.account_name AS "parentName",
+      ma.description AS "mainDescription"
       FROM accounting.accounts a LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
+      LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id
       WHERE a.company_id=$1 ORDER BY a.account_code`, [companyId]);
     const groups = new Map<string, { code: string; name: string }>();
     const detailGroups = new Set(accounts.filter(a => !a.isHeader).map(a => groupCode(a)));
     for (const account of accounts) {
       const code = groupCode(account);
       if (account.isHeader && !detailGroups.has(code)) continue;
-      if (!groups.has(code) || account.isHeader) groups.set(code, { code, name: account.isHeader ? account.accountName : account.parentName || account.accountName });
+      if (!groups.has(code) || account.isHeader) groups.set(code, { code, name: account.isHeader ? account.accountName : account.mainDescription || account.parentName || account.accountName });
     }
     const branches = await this.dataSource.query(`SELECT branch_id AS "branchId", branch_name AS "branchName"
       FROM core.branches WHERE company_id=$1 ORDER BY branch_name,branch_id`, [companyId]);
@@ -65,18 +67,23 @@ export class FinancialReportsService {
           ${query.branchId ? 'AND j.branch_id=$5' : ''}
       )
       SELECT a.account_code AS "accountCode",a.account_name AS "accountName",t.code AS "accountType",a.is_header AS "isHeader",
-        p.account_code AS "parentCode",
+        p.account_code AS "parentCode",ma.description AS "mainDescription",
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $3),0)::numeric(20,2)::text AS month,
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $4),0)::numeric(20,2)::text AS ytd,
         COALESCE(SUM(l.net),0)::numeric(20,2)::text AS closing,COUNT(l.account_id)::int AS activity,COUNT(l.account_id) FILTER(WHERE l.transaction_date >= $3)::int AS "monthActivity"
       FROM accounting.accounts a JOIN accounting.account_types t USING(account_type_id)
       LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
+      LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id
       LEFT JOIN posted_lines l ON l.account_id=a.account_id
       WHERE a.company_id=$1
-      GROUP BY a.account_id,a.account_code,a.account_name,t.code,a.is_header,p.account_code ORDER BY a.account_code
+      GROUP BY a.account_id,a.account_code,a.account_name,t.code,a.is_header,p.account_code,ma.description ORDER BY a.account_code
     `, query.branchId ? [query.companyId,query.asOf,monthStart,fiscalYearStart,query.branchId] : [query.companyId,query.asOf,monthStart,fiscalYearStart]);
     const labels = new Map<string,string>();
     for (const a of balances) if (a.isHeader) labels.set(groupCode(a),a.accountName);
+    for (const a of balances) {
+      const code = groupCode(a);
+      if (!labels.has(code) && a.mainDescription) labels.set(code, a.mainDescription);
+    }
     const groups = new Map<string,{ code: string; name: string; type: string; month: bigint; ytd: bigint; closing: bigint }>();
     for (const a of balances) {
       if (a.isHeader && !a.activity) continue;
@@ -103,7 +110,7 @@ export class FinancialReportsService {
       for (const group of ordered.filter(nonzero)) {
         const values={monthDebit:group.month>0n?group.month:0n,monthCredit:group.month<0n?-group.month:0n,
           ytdDebit:group.closing>0n?group.closing:0n,ytdCredit:group.closing<0n?-group.closing:0n};
-        report.rows.push({accountCode:/^\d{6}$/.test(group.code)?group.code+'-00000':group.code,description:group.name,
+        report.rows.push({accountCode:/^\d{5,6}$/.test(group.code)?group.code+'-00000':group.code,description:group.name,
           ...Object.fromEntries(Object.entries(values).map(([key,value])=>[key,amount(value)]))});
         for (const key of Object.keys(total) as (keyof typeof total)[]) total[key]+=values[key];
       }

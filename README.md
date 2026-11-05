@@ -177,6 +177,17 @@ $ mau deploy
 
 With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
 
+## Chart of accounts migration
+
+Run `npm run migrate:charts` against a database before starting the API build that uses the five-level chart of accounts. The runner applies two self-transactional, idempotent versions and records them in `core.schema_migrations`, so rerunning it only applies what is missing:
+
+- `20261105_chart_hierarchy` adds account subtypes, balance sheet classifications, main accounts, and generated codes for existing accounts, then adds the management menus. It aborts instead of leaving an account without a main account.
+- `20261105_transaction_account_columns` adds the debit/credit chart-of-accounts legs to `sales.customer_payments`, fills each payment's debit leg from its bank account, and sets `purchasing.expenses.payment_account_id` to `NOT NULL` once no NULL values remain.
+
+Provide `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, and `DB_SSL=true` for Supabase or another managed host in the terminal that runs the script. The API never executes schema migrations automatically, so take a database snapshot and run the migration before deploying the new API version.
+
+Payments that still have only a debit leg can be repaired separately: `node scripts/backfill-payment-credit-accounts.cjs` is a dry run, and `node scripts/backfill-payment-credit-accounts.cjs --apply` writes the missing credit legs and history rows.
+
 ## Resources
 
 Check out a few resources that may come in handy when working with NestJS:

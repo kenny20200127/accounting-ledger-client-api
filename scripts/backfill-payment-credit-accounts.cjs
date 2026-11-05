@@ -31,6 +31,10 @@ function fromCents(c) {
     user: process.env.DB_USERNAME,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
+    ssl:
+      process.env.DB_SSL?.toLowerCase() === 'true'
+        ? { rejectUnauthorized: false }
+        : undefined,
   });
   await db.connect();
   console.log(APPLY ? 'APPLYING changes' : 'DRY RUN (pass --apply to write)');

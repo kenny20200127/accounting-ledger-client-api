@@ -21,6 +21,11 @@ const tables: Record<string, [string, string]> = {
   branchId: ['core.branches', 'branch_id'],
   fiscalYearId: ['accounting.fiscal_years', 'fiscal_year_id'],
   accountId: ['accounting.accounts', 'account_id'],
+  mainAccountId: ['accounting.main_accounts', 'main_account_id'],
+  balanceSheetId: [
+    'accounting.balance_sheet_classifications',
+    'balance_sheet_id',
+  ],
   journalEntryId: ['accounting.journal_entries', 'journal_entry_id'],
   customerId: ['sales.customers', 'customer_id'],
   supplierId: ['purchasing.suppliers', 'supplier_id'],
@@ -37,6 +42,8 @@ const routes: Record<string, string> = {
   'fiscal-years': 'fiscalYearId',
   'accounting-periods': 'periodId',
   accounts: 'accountId',
+  'main-accounts': 'mainAccountId',
+  'balance-sheets': 'balanceSheetId',
   journals: 'journalEntryId',
   customers: 'customerId',
   suppliers: 'supplierId',
@@ -167,7 +174,9 @@ export class TenantGuard implements CanActivate {
           continue;
         }
         const normalized = /AccountId$/.test(field) ? 'accountId' : field;
-        if (field === 'bankAccountId') await this.access.owns(field, v, cid);
+        if (field === 'mainAccountId')
+          await this.access.owns('mainAccountId', v, cid);
+        else if (field === 'bankAccountId') await this.access.owns(field, v, cid);
         else if (tables[normalized] || normalized === 'periodId')
           await this.access.owns(normalized, v, cid);
         else if (typeof v === 'object') await walk(v);
