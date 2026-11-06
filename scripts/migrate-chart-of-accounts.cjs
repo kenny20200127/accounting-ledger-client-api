@@ -1,4 +1,11 @@
-require('dotenv').config({ quiet: true });
+const envFile =
+  process.env.DB_ENV_FILE || '.env';
+
+require('dotenv').config({
+  path: envFile,
+  quiet: true,
+});
+
 const { Client } = require('pg');
 const fs = require('node:fs');
 
@@ -54,7 +61,7 @@ const VERSIONS = [
         : 'Chart of accounts migrations already applied.',
     );
   } finally {
-    await db.query('SELECT pg_advisory_unlock(20261105)').catch(() => {});
+    await db.query('SELECT pg_advisory_unlock(20261105)').catch(() => { });
     await db.end();
   }
 })().catch((error) => {

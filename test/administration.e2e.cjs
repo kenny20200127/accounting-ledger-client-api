@@ -21,7 +21,24 @@ async function cleanup(cid){await ds.transaction(async m=>{
  await m.query('DELETE FROM core.role_menus WHERE role_id IN(SELECT role_id FROM core.roles WHERE company_id=$1)',[cid]);await m.query('DELETE FROM core.roles WHERE company_id=$1',[cid]);await m.query('DELETE FROM core.branches WHERE company_id=$1',[cid]);
  await m.query('DELETE FROM accounting.accounting_periods WHERE fiscal_year_id IN(SELECT fiscal_year_id FROM accounting.fiscal_years WHERE company_id=$1)',[cid]);await m.query('DELETE FROM accounting.fiscal_years WHERE company_id=$1',[cid]);await m.query('DELETE FROM core.companies WHERE company_id=$1',[cid]);
 });}
-async function onboard(label){const suffix=randomUUID().slice(0,8),username='tenant-'+suffix,password='Temporary-Test-'+randomUUID();const result=await call('post','platform/companies',platformToken,{companyCode:'TEST-'+suffix,companyName:label,industry:'Verification',country:'Nigeria',primaryColor:'#7c3aed',secondaryColor:'#f4efff',fiscalYearStartMonth:4,fiscalYearStartDay:1,firstAdmin:{username,email:username+'@example.test',password}}).expect(201);const data=result.body;created.push(data.company.companyId);const login=await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:username,password}).expect(201);assert.equal(login.body.user.isPlatformAdmin,false);assert.equal(login.body.user.isCompanyAdmin,true);assert.ok(!JSON.stringify(login.body).includes('passwordHash'));return {...data,token:login.body.accessToken,password,username,cid:data.company.companyId};}
+async function seedStandardChart(cid){
+ const types=await ds.query('SELECT account_type_id,code,code_prefix,name FROM accounting.account_types ORDER BY code_prefix');
+ const [subtype]=await ds.query("SELECT account_subtype_id FROM accounting.account_subtypes WHERE code='GL_ACCOUNT'");
+ assert.ok(subtype,'GL account subtype must exist');
+ const sheets={};
+ for(const type of types){
+  const [row]=await ds.query('INSERT INTO accounting.balance_sheet_classifications(company_id,account_type_id,code,description) VALUES($1,$2,$3,$4) RETURNING balance_sheet_id',[cid,type.account_type_id,type.code_prefix+'01',type.name]);
+  sheets[type.code]=row.balance_sheet_id;
+ }
+ const mains={};
+ for(const [code,name,typeCode] of [['1000','Bank and Cash','ASSET'],['1200','Trade Receivables','ASSET'],['1500','Fixed Assets','ASSET'],['1590','Accumulated Depreciation','ASSET'],['2000','Trade Payables','LIABILITY'],['3000','Owner Equity','EQUITY'],['4000','Sales Revenue','REVENUE'],['5000','Operating Expenses','EXPENSE'],['5900','Depreciation Expense','EXPENSE']]){
+  const type=types.find(t=>t.code===typeCode);assert.ok(type,'Missing account type '+typeCode);
+  mains[typeCode]=(mains[typeCode]??0)+1;
+  const [main]=await ds.query('INSERT INTO accounting.main_accounts(company_id,account_type_id,balance_sheet_id,account_subtype_id,main_code,description,short_name) VALUES($1,$2,$3,$4,$5,$6,$6) RETURNING main_account_id',[cid,type.account_type_id,sheets[typeCode],subtype.account_subtype_id,String(Number(type.code_prefix+'0000')+mains[typeCode]),name]);
+  await ds.query('INSERT INTO accounting.accounts(company_id,account_type_id,main_account_id,account_code,account_name,is_control_account) VALUES($1,$2,$3,$4,$5,$6)',[cid,type.account_type_id,main.main_account_id,code,name,['1200','2000'].includes(code)]);
+ }
+}
+async function onboard(label){const suffix=randomUUID().slice(0,8),username='tenant-'+suffix,password='Temporary-Test-'+randomUUID();const result=await call('post','platform/companies',platformToken,{companyCode:'TEST-'+suffix,companyName:label,industry:'Verification',country:'Nigeria',primaryColor:'#7c3aed',secondaryColor:'#f4efff',fiscalYearStartMonth:4,fiscalYearStartDay:1,firstAdmin:{username,email:username+'@example.test',password}}).expect(201);const data=result.body;created.push(data.company.companyId);await seedStandardChart(data.company.companyId);const login=await request(app.getHttpServer()).post('/api/v1/auth/login').send({identifier:username,password}).expect(201);assert.equal(login.body.user.isPlatformAdmin,false);assert.equal(login.body.user.isCompanyAdmin,true);assert.ok(!JSON.stringify(login.body).includes('passwordHash'));return {...data,token:login.body.accessToken,password,username,cid:data.company.companyId};}
 test('onboarding, tenant isolation, company branding, scoped permissions and session lifecycle',async t=>{
  const a=await onboard('Tenant Alpha Verification'),b=await onboard('Tenant Beta Verification');
  await t.test('separate login endpoints and session scopes enforce application boundaries',async()=>{
@@ -64,9 +81,13 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
  await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',debitAccountId:account('1000',accountsA),creditAccountId:account('1200')}).expect(403);
  await call('post','expenses',b.token,{companyId:b.cid,expenseDate:'2026-10-14',description:'Missing credit account',expenseAccountId:account('5000'),amount:'1.00'}).expect(400);
  const mainAccountId=accountsB.find(x=>x.accountCode==='5000').mainAccountId;
- const headerAcct=(await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountName:'Summary only',isHeader:true}).expect(201)).body;
- const noPostAcct=(await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountName:'Closed account',allowPosting:false}).expect(201)).body;
- assert.match(headerAcct.accountCode,/^\d{5}-\d{5}$/);assert.notEqual(headerAcct.accountCode,noPostAcct.accountCode);assert.equal(headerAcct.mainAccountId,mainAccountId);
+ await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountName:'Summary only',isHeader:true}).expect(400);
+ await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountName:'Closed account',allowPosting:false}).expect(400);
+ const createdAcct=(await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountName:'Summary only'}).expect(201)).body;
+ assert.match(createdAcct.accountCode,/^\d{5}-\d{5}$/);assert.equal(createdAcct.mainAccountId,mainAccountId);
+ const mainOf5000=accountsB.find(x=>x.accountCode==='5000'),headerId=randomUUID(),noPostId=randomUUID();
+ await ds.query(`INSERT INTO accounting.accounts(account_id,company_id,main_account_id,account_code,account_name,account_type_id,is_header,allow_posting) VALUES($1,$2,$3,$4,'Summary only',$5,TRUE,TRUE),($6,$2,$3,$7,'Closed account',$5,FALSE,FALSE)`,[headerId,b.cid,mainAccountId,mainOf5000.mainAccount.mainCode+'-90000',mainOf5000.accountTypeId,noPostId,mainOf5000.mainAccount.mainCode+'-90001']);
+ const headerAcct={accountId:headerId},noPostAcct={accountId:noPostId};
  await call('post','accounts',b.token,{companyId:b.cid,mainAccountId,accountCode:'MANUAL',accountName:'Manual code'}).expect(400);
  await t.test('chart hierarchy generates every code and blocks manual entry',async()=>{
   const types=(await call('get','account-types',b.token).expect(200)).body;
@@ -121,6 +142,15 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
   await call('patch','main-accounts/'+unusedMain.mainAccountId,b.token,{balanceSheetId:liabilitySheet.balanceSheetId}).expect(400);
   assert.deepEqual((await call('delete','main-accounts/'+unusedMain.mainAccountId,b.token).expect(200)).body,{deleted:true});
   await call('get','main-accounts/'+unusedMain.mainAccountId,b.token).expect(403);
+  await call('patch','accounts/'+first.accountId,b.token,{accountCode:first.accountCode}).expect(400);
+  await call('patch','accounts/'+first.accountId,b.token,{mainAccountId:main.mainAccountId}).expect(400);
+  const editedAccount=(await call('patch','accounts/'+first.accountId,b.token,{accountName:'Bank A edited',description:'Edited account'}).expect(200)).body;
+  assert.equal(editedAccount.accountCode,first.accountCode);assert.equal(editedAccount.accountName,'Bank A edited');assert.equal(editedAccount.description,'Edited account');
+  await call('patch','accounts/'+second.accountId,a.token,{accountName:'Foreign'}).expect(403);
+  await call('delete','accounts/'+account('1000'),b.token).expect(409);
+  await call('delete','accounts/'+second.accountId,a.token).expect(403);
+  assert.deepEqual((await call('delete','accounts/'+second.accountId,b.token).expect(200)).body,{deleted:true});
+  await call('get','accounts/'+second.accountId,b.token).expect(403);
  });
  const ledgerPayload=(debit,credit)=>({companyId:b.cid,customerId:customer.customerId,paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00',debitAccountId:debit,creditAccountId:credit});
  await call('post','customer-payments',b.token,ledgerPayload(headerAcct.accountId,account('1200'))).expect(400);

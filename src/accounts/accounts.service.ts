@@ -8,9 +8,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, FindOptionsWhere, Repository } from 'typeorm';
 import { Account } from './account.entity';
-import { isUniqueViolation, nextChartAccountCode } from './account-codes';
+import {
+  isForeignKeyViolation,
+  isUniqueViolation,
+  nextChartAccountCode,
+} from './account-codes';
 import { AccountListQueryDto } from './dto/account-list-query.dto';
 import { CreateAccountDto } from './dto/create-account.dto';
+import { UpdateAccountDto } from './dto/update-account.dto';
 import { MainAccount } from './main-account.entity';
 
 @Injectable()
@@ -64,9 +69,7 @@ export class AccountsService {
               accountName: dto.accountName.trim(),
               description: dto.description?.trim() || null,
               email: dto.email?.trim().toLowerCase() || null,
-              isHeader: dto.isHeader ?? false,
               isControlAccount: dto.isControlAccount ?? false,
-              allowPosting: dto.allowPosting ?? true,
               createdBy: createdBy ?? null,
             }),
           );
@@ -132,5 +135,46 @@ export class AccountsService {
     });
     if (!account) throw new NotFoundException('Account not found.');
     return account;
+  }
+
+  async update(id: string, dto: UpdateAccountDto): Promise<Account> {
+    if (dto.accountCode !== undefined)
+      throw new BadRequestException(
+        'Account codes are generated automatically and cannot be changed.',
+      );
+    if (dto.mainAccountId !== undefined)
+      throw new BadRequestException(
+        'An account cannot be moved to another main account.',
+      );
+    await this.findOne(id);
+
+    const values: Partial<Account> = {};
+    if (dto.accountName !== undefined)
+      values.accountName = dto.accountName.trim();
+    if (dto.description !== undefined)
+      values.description = dto.description.trim() || null;
+    if (dto.email !== undefined)
+      values.email = dto.email.trim().toLowerCase() || null;
+    if (Object.keys(values).length)
+      await this.accounts.update({ accountId: id }, values);
+    return this.findOne(id);
+  }
+
+  async remove(id: string) {
+    await this.findOne(id);
+    if (await this.accounts.exists({ where: { parentAccountId: id } }))
+      throw new ConflictException(
+        'This account still has child accounts. Delete or move them first.',
+      );
+    try {
+      await this.accounts.delete({ accountId: id });
+    } catch (error) {
+      if (isForeignKeyViolation(error))
+        throw new ConflictException(
+          'This account is used by existing records and cannot be deleted.',
+        );
+      throw error;
+    }
+    return { deleted: true };
   }
 }

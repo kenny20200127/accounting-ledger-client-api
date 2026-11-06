@@ -22,7 +22,6 @@ export class FirstAdminDto {
 }
 export class OnboardCompanyDto extends CreateCompanyDto {
   @ValidateNested() @Type(() => FirstAdminDto) firstAdmin: FirstAdminDto;
-  @IsOptional() @IsBoolean() seedStandardAccounts?: boolean;
 }
 export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional() @IsBoolean() isActive?: boolean;
