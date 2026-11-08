@@ -19,7 +19,7 @@ export class UpdateMainAccountDto {
   @IsUUID()
   accountSubtypeId?: string;
 
-  // Rejected by the service: generated codes and account types are immutable.
+  // Rejected by the service: account codes and account types are immutable.
   @IsOptional()
   @IsString()
   mainCode?: string;

@@ -42,14 +42,63 @@ export class FinancialReportsService {
     return { company, groups: [...groups.values()].sort((a,b) => a.code.localeCompare(b.code)), branches, fiscalYears };
   }
 
+  private async structure(query: FinancialReportQuery, company: Awaited<ReturnType<FinancialReportsService['company']>>, branchName: string): Promise<FinancialReport> {
+    const report: FinancialReport = {
+      kind:query.report,title:'',...company,asOf:query.asOf,monthStart:'',fiscalYearStart:'',branchName,
+      generatedAt:new Date().toISOString(),columns:[],rows:[],totals:[],warnings:[],
+    };
+    if (query.report==='chart-of-accounts') {
+      report.title='Chart of Accounts';
+      report.columns=[{key:'accountCode',label:'Account No.'},{key:'description',label:'Description'},
+        {key:'accountType',label:'Account type'}];
+      const accounts: { accountCode: string; accountName: string; accountType: string; isHeader: boolean; mainCode: string | null; mainDescription: string | null }[] =
+        await this.dataSource.query(`SELECT a.account_code AS "accountCode",a.account_name AS "accountName",t.code AS "accountType",
+          a.is_header AS "isHeader",ma.main_code AS "mainCode",ma.description AS "mainDescription"
+          FROM accounting.accounts a JOIN accounting.account_types t USING(account_type_id)
+          LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id AND ma.company_id=a.company_id
+          WHERE a.company_id=$1 ORDER BY COALESCE(ma.main_code,'~'),a.account_code`,[query.companyId]);
+      let section: string | null = null;
+      for (const account of accounts) {
+        const group = account.mainCode ? `${account.mainCode} - ${account.mainDescription}` : 'Unassigned';
+        if (group !== section) { report.rows.push({description:group,isSection:true});section=group; }
+        report.rows.push({accountCode:account.accountCode,description:account.accountName,accountType:account.accountType});
+      }
+      const headers = accounts.filter(account => account.isHeader).length;
+      report.totals=[{label:`${accounts.length} chart accounts, ${headers} header${headers===1?'':'s'}`,values:{}}];
+      if (!accounts.length) report.warnings.push('No chart accounts are configured for this company.');
+      else if (accounts.some(account => !account.mainCode)) report.warnings.push('Some chart accounts are not assigned to a main account.');
+    } else {
+      report.title='Main Accounts';
+      report.columns=[{key:'mainCode',label:'Main code'},{key:'description',label:'Description'},{key:'shortName',label:'Short name'},
+        {key:'accountType',label:'Account type'},{key:'balanceSheet',label:'Balance sheet'},{key:'subtype',label:'Subtype'}];
+      const mains: { mainCode: string; description: string; shortName: string | null; accountType: string; balanceSheet: string | null; subtype: string | null }[] =
+        await this.dataSource.query(`SELECT ma.main_code AS "mainCode",ma.description,ma.short_name AS "shortName",t.code AS "accountType",
+          b.description AS "balanceSheet",s.name AS "subtype"
+          FROM accounting.main_accounts ma
+          JOIN accounting.account_types t ON t.account_type_id=ma.account_type_id
+          LEFT JOIN accounting.balance_sheet_classifications b ON b.balance_sheet_id=ma.balance_sheet_id
+          LEFT JOIN accounting.account_subtypes s ON s.account_subtype_id=ma.account_subtype_id
+          WHERE ma.company_id=$1 ORDER BY ma.main_code`,[query.companyId]);
+      for (const main of mains) {
+        report.rows.push({mainCode:main.mainCode,description:main.description,shortName:main.shortName || '',
+          accountType:main.accountType,balanceSheet:main.balanceSheet || '',subtype:main.subtype || ''});
+      }
+      report.totals=[{label:`${mains.length} main accounts`,values:{}}];
+      if (!mains.length) report.warnings.push('No main accounts are configured for this company.');
+    }
+    return report;
+  }
+
   async generate(query: FinancialReportQuery): Promise<FinancialReport> {
     const company = await this.company(query.companyId);
+    if (query.groupCodes && query.report !== 'account-balances') throw new BadRequestException('Account-group filtering is available for the Balance of Account report.');
     let branchName = 'All branches';
     if (query.branchId) {
       const [branch] = await this.dataSource.query('SELECT branch_name FROM core.branches WHERE branch_id=$1 AND company_id=$2', [query.branchId,query.companyId]);
       if (!branch) throw new BadRequestException('Branch must belong to the selected company.');
       branchName = branch.branch_name;
     }
+    if (query.report === 'chart-of-accounts' || query.report === 'main-accounts') return this.structure(query, company, branchName);
     const years = await this.dataSource.query(`SELECT start_date::text AS start,end_date::text AS end
       FROM accounting.fiscal_years WHERE company_id=$1 AND ${query.fiscalYearId ? 'fiscal_year_id=$2' : 'start_date <= $2 AND end_date >= $2'}
       ORDER BY start_date DESC`, query.fiscalYearId ? [query.companyId,query.fiscalYearId] : [query.companyId,query.asOf]);
@@ -92,7 +141,6 @@ export class FinancialReportsService {
       if (!group) { group={code,name:labels.get(code) || a.accountName,type:a.accountType,month:0n,ytd:0n,closing:0n}; groups.set(code,group); }
       group.month+=cents(a.month); group.ytd+=cents(a.ytd); group.closing+=cents(a.closing);
     }
-    if (query.groupCodes && query.report !== 'account-balances') throw new BadRequestException('Account-group filtering is available for the Balance of Account report.');
     if (query.groupCodes?.some(code=>!groups.has(code))) throw new BadRequestException('One or more account groups do not belong to this company.');
     const report: FinancialReport = {
       kind:query.report,title:'',...company,asOf:query.asOf,monthStart,fiscalYearStart,branchName,

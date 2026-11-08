@@ -32,6 +32,25 @@ export class LedgerService {
     if (!(await this.companies.exists({ where: { companyId: dto.companyId } }))) {
       throw new BadRequestException('Company does not exist.');
     }
+    let debitTotal = 0n;
+    let creditTotal = 0n;
+    for (const line of dto.lines) {
+      const cents = toCents(line.amount);
+      if (line.transactionType === 'DB') debitTotal += cents;
+      else creditTotal += cents;
+    }
+    if (debitTotal === 0n || creditTotal === 0n) {
+      throw new BadRequestException(
+        'A ledger batch must contain at least one debit line and one credit line.',
+      );
+    }
+    if (debitTotal !== creditTotal) {
+      const difference =
+        debitTotal > creditTotal ? debitTotal - creditTotal : creditTotal - debitTotal;
+      throw new BadRequestException(
+        `Ledger batch is out of balance by ${centsToAmount(difference)}. Total debits must equal total credits.`,
+      );
+    }
     if (dto.branchId) {
       const branch = await this.branches.findOne({ where: { branchId: dto.branchId } });
       if (!branch || branch.companyId !== dto.companyId) {

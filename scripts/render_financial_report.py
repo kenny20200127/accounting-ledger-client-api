@@ -41,9 +41,13 @@ def render(report):
         except Exception:
             logo=None
     logo_height=42 if logo else 0
+    kind=report['kind']
+    header_line=f"As at: {report['asOf']}"
+    if kind not in ('chart-of-accounts','main-accounts'):
+        header_line+=f" | {report['branchName']} | Currency: {report['currency']}"
     header_blocks=[]
     for text,size,leading,font in [(report['companyName'],10,12,'ReportBold'),(report.get('address',''),8,10,'Report'),(report['title'],12,15,'ReportBold'),
-        (f"As at: {report['asOf']} | {report['branchName']} | Currency: {report['currency']}",7.4,9,'Report')]:
+        (header_line,7.4,9,'Report')]:
         if not text:continue
         paragraph=Paragraph(escape(text),ParagraphStyle('Header',fontName=font,fontSize=size,leading=leading,alignment=TA_CENTER))
         _,ph=paragraph.wrap(available,height)
@@ -55,9 +59,14 @@ def render(report):
     note=ParagraphStyle('Note',parent=normal,fontSize=7.3,leading=10,textColor=colors.HexColor('#46534c'))
     bold=ParagraphStyle('Bold',parent=normal,fontName='ReportBold')
     columns=report['columns']
-    if report['kind']=='trial-balance': widths=[77,available-77-4*69,69,69,69,69]
-    elif report['kind']=='profit-loss': widths=[available-200,100,100]
-    else: widths=[87,available-207,120]
+    if kind=='trial-balance': widths=[77,available-77-4*69,69,69,69,69]
+    elif kind=='profit-loss': widths=[available-200,100,100]
+    elif kind=='account-balances': widths=[87,available-207,120]
+    elif len(columns)>1:
+        first=min(130,available*0.2)
+        widths=[first]+[(available-first)/(len(columns)-1)]*(len(columns)-1)
+    else:
+        widths=[available]
     def cell(value,index,header=False,is_bold=False,numeric=False):
         text=monetary(value) if numeric else str(value or '')
         style=ParagraphStyle('Cell',parent=bold if header or is_bold else normal,
@@ -110,6 +119,10 @@ def render(report):
         story += [Paragraph('Current month: net movement. Year to date: closing balance including brought-forward posted entries.',note),Spacer(1,6)]
     elif report['kind']=='profit-loss':
         story += [Paragraph('Credit income and profit appear in parentheses. Year to date starts '+escape(report['fiscalYearStart'])+'.',note),Spacer(1,6)]
+    elif report['kind']=='chart-of-accounts':
+        story += [Paragraph('Chart accounts are grouped by main account.',note),Spacer(1,6)]
+    elif report['kind']=='main-accounts':
+        story += [Paragraph('Main accounts define the code range and classification used by their chart accounts.',note),Spacer(1,6)]
     for warning in report.get('warnings',[]):
         story.append(Paragraph(escape(warning),note))
     if report.get('warnings'):story.append(Spacer(1,8))
@@ -126,10 +139,11 @@ def render(report):
             paragraph.drawOn(canvas,32,y-ph);y-=ph+5
         canvas.setFont('Report',7)
         canvas.drawString(32,y-8,'Produced on: '+stamp+' (Africa/Lagos)')
-        canvas.drawRightString(width-32,y-8,'Fiscal year start: '+report['fiscalYearStart'])
+        if report.get('fiscalYearStart'):
+            canvas.drawRightString(width-32,y-8,'Fiscal year start: '+report['fiscalYearStart'])
         canvas.setStrokeColor(primary);canvas.line(32,y-13,width-32,y-13)
         canvas.setFillColor(colors.HexColor('#58655c'));canvas.setFont('Report',7)
-        canvas.drawString(32,24,'Based on posted journal entries')
+        canvas.drawString(32,24,'Account structure as configured' if kind in ('chart-of-accounts','main-accounts') else 'Based on posted journal entries')
         canvas.drawRightString(width-32,24,'Page '+str(document.page))
         canvas.restoreState()
     doc.build(story,onFirstPage=header_footer,onLaterPages=header_footer)

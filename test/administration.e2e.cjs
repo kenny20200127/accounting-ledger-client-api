@@ -107,7 +107,10 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
   assert.equal(main.mainCode,preview.mainCode);
   const next=(await call('get','main-accounts/next-code?companyId='+b.cid+'&accountTypeId='+asset.accountTypeId,b.token).expect(200)).body;
   assert.equal(Number(next.mainCode),Number(main.mainCode)+1);
-  await call('post','main-accounts',b.token,{companyId:b.cid,accountTypeId:asset.accountTypeId,balanceSheetId:sheet.balanceSheetId,accountSubtypeId:gl.accountSubtypeId,description:'Manual',mainCode:'19999'}).expect(400);
+  const manualMain=(await call('post','main-accounts',b.token,{companyId:b.cid,accountTypeId:asset.accountTypeId,balanceSheetId:sheet.balanceSheetId,accountSubtypeId:gl.accountSubtypeId,description:'Manual code',mainCode:'10010'}).expect(201)).body;
+  assert.equal(manualMain.mainCode,'10010');
+  await call('post','main-accounts',b.token,{companyId:b.cid,accountTypeId:asset.accountTypeId,balanceSheetId:sheet.balanceSheetId,accountSubtypeId:gl.accountSubtypeId,description:'Duplicate code',mainCode:'10010'}).expect(409);
+  await call('post','main-accounts',b.token,{companyId:b.cid,accountTypeId:asset.accountTypeId,balanceSheetId:sheet.balanceSheetId,accountSubtypeId:gl.accountSubtypeId,description:'Invalid code',mainCode:'ABC'}).expect(400);
   const first=(await call('post','accounts',b.token,{companyId:b.cid,mainAccountId:main.mainAccountId,accountName:'Bank A'}).expect(201)).body;
   const second=(await call('post','accounts',b.token,{companyId:b.cid,mainAccountId:main.mainAccountId,accountName:'Bank B'}).expect(201)).body;
   assert.equal(first.accountCode,main.mainCode+'-00001');assert.equal(second.accountCode,main.mainCode+'-00002');
@@ -158,6 +161,8 @@ test('onboarding, tenant isolation, company branding, scoped permissions and ses
  await call('post','expenses',b.token,{companyId:b.cid,expenseDate:'2026-10-14',description:'Header credit',expenseAccountId:account('5000'),paymentAccountId:headerAcct.accountId,amount:'1.00'}).expect(400);
  await call('post','customer-payments',b.token,{companyId:b.cid,customerId:customer.customerId,paymentNumber:'PAY-1',paymentDate:'2026-10-14',paymentMethod:'BANK',amount:'1.00'}).expect(400);
  const journal=(await call('post','journals',b.token,{companyId:b.cid,branchId:b.branch.branchId,periodId:period.periodId,transactionDate:'2026-10-14',description:'Test revenue',lines:[{accountId:account('1000'),debitAmount:'12.34',creditAmount:'0.00'},{accountId:account('4000'),debitAmount:'0.00',creditAmount:'12.34'}]}).expect(201)).body;
+ await call('post','ledger-batches',b.token,{companyId:b.cid,docType:'JV',docDate:'2026-10-14',lines:[{accountCode:'1000',amount:'1.00',transactionType:'DB'}]}).expect(400);
+ await call('post','ledger-batches',b.token,{companyId:b.cid,docType:'JV',docDate:'2026-10-14',lines:[{accountCode:'1000',amount:'1.00',transactionType:'DB'},{accountCode:'4000',amount:'2.00',transactionType:'CR'}]}).expect(400);
  await t.test('all operational detail routes and nested actions reject foreign records',async()=>{
   for(const [path,id] of [['customers',customer.customerId],['suppliers',supplier.supplierId],['banking/accounts',bank.bankAccountId],['expenses',expense.expenseId],['fixed-assets',asset.assetId],['invoices',invoice.invoiceId],['customer-payments',payment.paymentId],['journals',journal.journalEntryId]])await call('get',path+'/'+id,a.token).expect(403);
   await call('get','customers/'+customer.customerId+'/payments',a.token).expect(403);await call('get','banking/accounts/'+bank.bankAccountId+'/transactions',a.token).expect(403);

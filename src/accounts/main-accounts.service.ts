@@ -43,10 +43,6 @@ export class MainAccountsService {
     dto: CreateMainAccountDto,
     createdBy?: string,
   ): Promise<MainAccount> {
-    if (dto.mainCode?.trim())
-      throw new BadRequestException(
-        'Main account codes are generated automatically and cannot be set manually.',
-      );
     const type = await this.types.findOne({
       where: { accountTypeId: dto.accountTypeId },
     });
@@ -70,6 +66,29 @@ export class MainAccountsService {
       }))
     )
       throw new BadRequestException('Account subtype does not exist.');
+
+    if (dto.mainCode) {
+      try {
+        return await this.dataSource.transaction((manager) =>
+          this.save(manager, {
+            companyId: dto.companyId,
+            accountTypeId: dto.accountTypeId,
+            balanceSheetId: dto.balanceSheetId,
+            accountSubtypeId: dto.accountSubtypeId,
+            mainCode: dto.mainCode,
+            description: dto.description.trim(),
+            shortName: dto.shortName?.trim() || null,
+            createdBy: createdBy ?? null,
+          }),
+        );
+      } catch (error) {
+        if (isUniqueViolation(error))
+          throw new ConflictException(
+            `Main account code ${dto.mainCode} is already in use.`,
+          );
+        throw error;
+      }
+    }
 
     for (let attempt = 0; ; attempt++) {
       try {
@@ -161,7 +180,7 @@ export class MainAccountsService {
   async update(id: string, dto: UpdateMainAccountDto): Promise<MainAccount> {
     if (dto.mainCode !== undefined)
       throw new BadRequestException(
-        'Main account codes are generated automatically and cannot be changed.',
+        'Main account codes cannot be changed after creation.',
       );
     const row = await this.findOne(id);
     if (dto.balanceSheetId) {

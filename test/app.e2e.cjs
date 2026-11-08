@@ -206,7 +206,7 @@ test('financial report previews and PDF downloads validate filters and scoped co
   const base='/api/v1/reports/financial?companyId='+company.company_id+'&asOf=2026-03-31';
   const options=(await get('/api/v1/reports/financial/options?companyId='+company.company_id).expect(200)).body;
   assert.ok(options.groups.some(g=>g.code==='156000'));
-  for(const kind of ['trial-balance','profit-loss','account-balances']) {
+  for(const kind of ['trial-balance','profit-loss','account-balances','chart-of-accounts','main-accounts']) {
     const result=(await get(base+'&report='+kind).expect(200)).body;
     assert.equal(result.kind,kind);assert.ok(Array.isArray(result.rows));assert.equal(result.companyName,options.company.companyName);
   }
@@ -280,11 +280,24 @@ test('financial reports compute month, fiscal-year, closing balances, net profit
     assert.equal(detail.rows.length,1);assert.equal(detail.totals[0].values.balance,'1250.00');
     assert.equal(detail.rows[0].accountCode,'156000-00001');
     const options=await service.options(cid);assert.equal(options.groups.length,4);assert.equal(options.groups.find(g=>g.code==='156000').name,'Bank balances');
+    const chart=await service.generate({...base,report:'chart-of-accounts'});
+    assert.equal(chart.rows.filter(row=>row.isSection).length,4);
+    assert.equal(chart.rows.filter(row=>!row.isSection).length,8);
+    assert.equal(chart.columns.length,3);
+    assert.ok(!chart.columns.some(column=>column.key==='posting'));
+    assert.equal(chart.fiscalYearStart,'');
+    const mains=await service.generate({...base,report:'main-accounts'});
+    assert.equal(mains.rows.length,4);
+    assert.equal(mains.columns.length,6);
+    assert.ok(!mains.columns.some(column=>column.key==='accounts'));
+    assert.equal(mains.rows.find(row=>row.mainCode==='156000').balanceSheet,'Bank balances classification');
+    assert.equal(mains.fiscalYearStart,'');
     const selected=await service.generate({...base,report:'profit-loss',fiscalYearId:fy});assert.equal(selected.totals[0].values.ytdAmount,'-250.00');
     const overlapping=randomUUID();
     await runner.query('INSERT INTO accounting.fiscal_years(fiscal_year_id,company_id,year_name,start_date,end_date) VALUES($1,$2,$3,$4,$5)',[overlapping,cid,'Alternate FY','2025-07-01','2026-06-30']);
     await assert.rejects(()=>service.generate({...base,report:'profit-loss'}),/Overlapping fiscal years/);
     const alternate=await service.generate({...base,report:'profit-loss',fiscalYearId:overlapping});assert.equal(alternate.fiscalYearStart,'2025-07-01');
+    const independent=await service.generate({...base,report:'chart-of-accounts'});assert.equal(independent.rows.filter(row=>row.isSection).length,4);
     await assert.rejects(()=>service.generate({...base,report:'profit-loss',branchId:randomUUID()}),/Branch must belong/);
     await assert.rejects(()=>service.generate({...base,report:'account-balances',groupCodes:['missing'],fiscalYearId:fy}),/account groups/);
   }finally{await runner.rollbackTransaction();await runner.release();}
