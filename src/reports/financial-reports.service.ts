@@ -113,7 +113,13 @@ export class FinancialReportsService {
         SELECT l.account_id,l.debit_amount-l.credit_amount AS net,j.transaction_date
         FROM accounting.journal_entry_lines l JOIN accounting.journal_entries j USING(journal_entry_id)
         WHERE j.company_id=$1 AND j.status IN('POSTED','REVERSED') AND j.transaction_date <= $2
+          AND NOT EXISTS (SELECT 1 FROM accounting.legacy_migration_records r WHERE r.journal_entry_id=j.journal_entry_id)
           ${query.branchId ? 'AND j.branch_id=$5' : ''}
+        UNION ALL
+        SELECT h.account_id,h.debit_amount-h.credit_amount AS net,h.doc_date AS transaction_date
+        FROM ledger.histories h
+        WHERE h.company_id=$1 AND h.doc_date <= $2
+          ${query.branchId ? 'AND h.branch_id=$5' : ''}
       )
       SELECT a.account_code AS "accountCode",a.account_name AS "accountName",t.code AS "accountType",a.is_header AS "isHeader",
         p.account_code AS "parentCode",ma.description AS "mainDescription",
