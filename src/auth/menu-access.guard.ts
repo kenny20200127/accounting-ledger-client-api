@@ -5,7 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { RoleMenu } from '../roles/role-menu.entity';
 import { UserRole } from '../users/user-role.entity';
 
@@ -51,6 +51,7 @@ export class MenuAccessGuard implements CanActivate {
     private readonly userRoles: Repository<UserRole>,
     @InjectRepository(RoleMenu)
     private readonly roleMenus: Repository<RoleMenu>,
+    private readonly ds: DataSource,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -61,10 +62,9 @@ export class MenuAccessGuard implements CanActivate {
     );
     const firstSegment = path.split('/').filter(Boolean)[0];
     if (!firstSegment || firstSegment === 'auth') return true;
-    if (
-      request.actor?.isPlatformAdmin ||
-      (firstSegment === 'companies' && request.method === 'GET')
-    )
+    if (request.actor?.isPlatformAdmin) return true;
+    // Tenant-scoped company reads supply workspace identity even when Settings is disabled.
+    if (firstSegment === 'companies' && ['GET', 'HEAD'].includes(request.method))
       return true;
     const menuCode = firstSegment ? routeMenus[firstSegment] : undefined;
     if (!menuCode)
@@ -75,6 +75,21 @@ export class MenuAccessGuard implements CanActivate {
     const userId = request.user?.sub as string | undefined;
     if (!userId)
       throw new ForbiddenException('Authenticated user is required.');
+
+    const menuCodes = [menuCode];
+    if (/^\/?banking\/accounts\/[^/]+\/transactions\/[^/]+\/reconcile\/?$/i.test(path))
+      menuCodes.push('BANK_RECONCILIATION');
+    if (/^\/?customers\/[^/]+\/payments\/?$/i.test(path))
+      menuCodes.push('PAYMENTS');
+    const available: { menuCode: string }[] = await this.ds.query(
+      `SELECT m.menu_code AS "menuCode" FROM core.menus m
+       WHERE m.menu_code=ANY($2::text[]) AND m.is_active
+       AND NOT EXISTS (SELECT 1 FROM core.company_menu_settings s
+         WHERE s.company_id=$1 AND s.menu_id=m.menu_id AND NOT s.is_enabled)`,
+      [request.actor.companyId, menuCodes],
+    );
+    if (menuCodes.some((code) => !available.some((menu) => menu.menuCode === code)))
+      throw new ForbiddenException('This functionality is disabled for your company.');
 
     const userRoles = await this.userRoles.find({
       where: { userId },

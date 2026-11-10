@@ -2,6 +2,8 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   ArrayMinSize,
+  ArrayMaxSize,
+  IsObject,
   IsBoolean,
   IsEmail,
   IsOptional,
@@ -25,6 +27,18 @@ export class OnboardCompanyDto extends CreateCompanyDto {
 }
 export class UpdateCompanyDto extends PartialType(CreateCompanyDto) {
   @IsOptional() @IsBoolean() isActive?: boolean;
+}
+export class CompanyMenuSettingDto {
+  @IsUUID() menuId: string;
+  @IsBoolean() isEnabled: boolean;
+}
+export class UpdateCompanyMenusDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsObject({ each: true })
+  @ValidateNested({ each: true })
+  @Type(() => CompanyMenuSettingDto)
+  menus: CompanyMenuSettingDto[];
 }
 export class UpdateUserDto {
   @IsOptional()

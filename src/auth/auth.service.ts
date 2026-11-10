@@ -149,7 +149,9 @@ export class AuthService {
       `SELECT m.menu_id AS "menuId",m.parent_menu_id AS "parentMenuId",m.menu_code AS "menuCode",m.menu_name AS "menuName",m.menu_url AS "menuUrl",m.icon,m.display_order AS "displayOrder",
       bool_or(rm.can_view) AS "canView",bool_or(rm.can_create) AS "canCreate",bool_or(rm.can_edit) AS "canEdit",bool_or(rm.can_delete) AS "canDelete",bool_or(rm.can_approve) AS "canApprove"
       FROM core.user_roles ur JOIN core.roles r USING(role_id) JOIN core.role_menus rm USING(role_id) JOIN core.menus m USING(menu_id)
-      WHERE ur.user_id=$1 AND r.company_id=$2 AND m.is_active AND m.menu_code<>'PLATFORM_ADMIN' GROUP BY m.menu_id HAVING bool_or(rm.can_view) ORDER BY m.display_order`,
+      WHERE ur.user_id=$1 AND r.company_id=$2 AND m.is_active AND m.menu_code<>'PLATFORM_ADMIN'
+      AND NOT EXISTS (SELECT 1 FROM core.company_menu_settings s WHERE s.company_id=$2 AND s.menu_id=m.menu_id AND NOT s.is_enabled)
+      GROUP BY m.menu_id HAVING bool_or(rm.can_view) ORDER BY m.display_order`,
       [userId, actor.companyId],
     );
     return rows.map((row) => ({

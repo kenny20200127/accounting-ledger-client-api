@@ -21,6 +21,7 @@ import {
   OnboardCompanyDto,
   SaveRoleDto,
   UpdateCompanyDto,
+  UpdateCompanyMenusDto,
   UpdateUserDto,
 } from './admin.dto';
 @Injectable()
@@ -282,6 +283,61 @@ export class AdministrationService {
       return c;
     });
   }
+  private companyMenuCatalogue(m: EntityManager, companyId: string) {
+    return m.query<
+      { menuId: string; menuCode: string; menuName: string; isEnabled: boolean }[]
+    >(
+      `SELECT m.menu_id AS "menuId",m.menu_code AS "menuCode",m.menu_name AS "menuName",coalesce(s.is_enabled,true) AS "isEnabled"
+       FROM core.menus m
+       LEFT JOIN core.company_menu_settings s ON s.menu_id=m.menu_id AND s.company_id=$1
+       WHERE m.is_active AND m.menu_code<>'PLATFORM_ADMIN'
+       ORDER BY m.display_order,m.menu_code`,
+      [companyId],
+    );
+  }
+  async companyMenus(id: string, actor: Actor) {
+    if (!actor.isPlatformAdmin)
+      throw new ForbiddenException('Platform administrator access required.');
+    const company = await this.ds.getRepository(Company).findOneBy({
+      companyId: id,
+    });
+    if (!company) throw new NotFoundException('Company not found.');
+    return this.companyMenuCatalogue(this.ds.manager, id);
+  }
+  async updateCompanyMenus(
+    id: string,
+    dto: UpdateCompanyMenusDto,
+    actor: Actor,
+  ) {
+    if (!actor.isPlatformAdmin)
+      throw new ForbiddenException('Platform administrator access required.');
+    return this.ds.transaction(async (m) => {
+      const company = await m.getRepository(Company).findOne({
+        where: { companyId: id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!company) throw new NotFoundException('Company not found.');
+      const menus = dto.menus.map(({ menuId, isEnabled }) => ({
+        menuId: menuId.toLowerCase(),
+        isEnabled,
+      }));
+      if (new Set(menus.map((menu) => menu.menuId)).size !== menus.length)
+        throw new BadRequestException('Duplicate company menu setting.');
+      const catalogue = await this.companyMenuCatalogue(m, id);
+      const allowed = new Set(catalogue.map((menu) => menu.menuId));
+      if (menus.some((menu) => !allowed.has(menu.menuId)))
+        throw new BadRequestException('Invalid company menu setting.');
+      if (!menus.length) return catalogue;
+      for (const menu of menus)
+        await m.query(
+          `INSERT INTO core.company_menu_settings(company_id,menu_id,is_enabled) VALUES($1,$2,$3)
+           ON CONFLICT (company_id,menu_id) DO UPDATE SET is_enabled=EXCLUDED.is_enabled`,
+          [id, menu.menuId, menu.isEnabled],
+        );
+      await this.audit(m, actor, id, 'COMPANY_MENUS_UPDATED', id, { menus });
+      return this.companyMenuCatalogue(m, id);
+    });
+  }
   async roles(actor: Actor, companyId?: string) {
     this.access.admin(actor);
     const cid = this.scope(actor, companyId);
@@ -298,8 +354,8 @@ export class AdministrationService {
     this.access.admin(actor);
     this.scope(actor, role.companyId);
     return this.ds.query(
-      `SELECT m.menu_id AS "menuId",m.menu_name AS "menuName",m.menu_code AS "menuCode",coalesce(r.can_view,false) AS "canView",coalesce(r.can_create,false) AS "canCreate",coalesce(r.can_edit,false) AS "canEdit",coalesce(r.can_delete,false) AS "canDelete",coalesce(r.can_approve,false) AS "canApprove" FROM core.menus m LEFT JOIN core.role_menus r ON r.menu_id=m.menu_id AND r.role_id=$1 WHERE m.is_active AND m.menu_code<>'PLATFORM_ADMIN' ORDER BY m.display_order`,
-      [id],
+      `SELECT m.menu_id AS "menuId",m.menu_name AS "menuName",m.menu_code AS "menuCode",coalesce(s.is_enabled,true) AS "companyEnabled",coalesce(r.can_view,false) AS "canView",coalesce(r.can_create,false) AS "canCreate",coalesce(r.can_edit,false) AS "canEdit",coalesce(r.can_delete,false) AS "canDelete",coalesce(r.can_approve,false) AS "canApprove" FROM core.menus m LEFT JOIN core.role_menus r ON r.menu_id=m.menu_id AND r.role_id=$1 LEFT JOIN core.company_menu_settings s ON s.menu_id=m.menu_id AND s.company_id=$2 WHERE m.is_active AND m.menu_code<>'PLATFORM_ADMIN' ORDER BY m.display_order`,
+      [id, role.companyId],
     );
   }
   async saveRole(dto: SaveRoleDto, actor: Actor, id?: string) {

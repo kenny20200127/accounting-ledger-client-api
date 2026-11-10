@@ -27,7 +27,12 @@ import { TenantAccessService as Access } from './tenant-access.service';
 import { ResetPasswordDto, UpdateUserDto } from './admin.dto';
 import { AdministrationService } from './administration.service';
 import { TenantAccessService } from './tenant-access.service';
-import { OnboardCompanyDto, SaveRoleDto, UpdateCompanyDto } from './admin.dto';
+import {
+  OnboardCompanyDto,
+  SaveRoleDto,
+  UpdateCompanyDto,
+  UpdateCompanyMenusDto,
+} from './admin.dto';
 @ApiTags('platform/companies')
 @ApiBearerAuth()
 @Controller('platform/companies')
@@ -83,6 +88,19 @@ class PlatformController {
     @Req() req: any,
   ) {
     return this.admin.removeLogo(id, req.actor);
+  }
+  @Get(':id/menus') menus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+  ) {
+    return this.admin.companyMenus(id, req.actor);
+  }
+  @Patch(':id/menus') updateMenus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCompanyMenusDto,
+    @Req() req: any,
+  ) {
+    return this.admin.updateCompanyMenus(id, dto, req.actor);
   }
   @Get(':id/users') users(
     @Param('id', ParseUUIDPipe) id: string,
