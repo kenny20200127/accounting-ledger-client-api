@@ -206,7 +206,7 @@ test('financial report previews and PDF downloads validate filters and scoped co
   const base='/api/v1/reports/financial?companyId='+company.company_id+'&asOf=2026-03-31';
   const options=(await get('/api/v1/reports/financial/options?companyId='+company.company_id).expect(200)).body;
   assert.ok(options.groups.some(g=>g.code==='156000'));
-  for(const kind of ['trial-balance','profit-loss','account-balances','chart-of-accounts','main-accounts']) {
+  for(const kind of ['trial-balance','trial-balance-detail','profit-loss','account-balances','chart-of-accounts','main-accounts']) {
     const result=(await get(base+'&report='+kind).expect(200)).body;
     assert.equal(result.kind,kind);assert.ok(Array.isArray(result.rows));assert.equal(result.companyName,options.company.companyName);
   }
@@ -271,7 +271,13 @@ test('financial reports compute month, fiscal-year, closing balances, net profit
     assert.equal(trial.balanced,true);
     assert.equal(trial.rows.length,4); // Header accounts and detail accounts are not counted twice.
     assert.deepEqual(trial.totals[0].values,{monthDebit:'100.00',monthCredit:'100.00',ytdDebit:'1300.00',ytdCredit:'1300.00'});
-    const bank=trial.rows.find(row=>row.accountCode==='156000-00000');assert.equal(bank.monthDebit,'50.00');assert.equal(bank.ytdDebit,'1250.00');
+    assert.equal(trial.title,'Summary Trial Balance');
+    const bank=trial.rows.find(row=>row.accountCode==='156000');assert.equal(bank.monthDebit,'50.00');assert.equal(bank.ytdDebit,'1250.00');
+    const detailTrial=await service.generate({...base,report:'trial-balance-detail'});
+    assert.equal(detailTrial.title,'Detail Trial Balance');assert.equal(detailTrial.balanced,true);
+    assert.equal(detailTrial.rows.length,4);assert.deepEqual(detailTrial.totals,trial.totals);
+    const detailBank=detailTrial.rows.find(row=>row.accountCode==='156000-00001');
+    assert.equal(detailBank.description,'Bank balances detail');assert.equal(detailBank.monthDebit,'50.00');assert.equal(detailBank.ytdDebit,'1250.00');
     const pnl=await service.generate({...base,report:'profit-loss'});
     assert.deepEqual(pnl.totals[0].values,{monthAmount:'-50.00',ytdAmount:'-250.00'});
     assert.ok(pnl.warnings.includes('1 unposted journals through this date are excluded.'));

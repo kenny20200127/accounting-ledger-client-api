@@ -42,6 +42,7 @@ def render(report):
             logo=None
     logo_height=42 if logo else 0
     kind=report['kind']
+    trial_balance=kind in ('trial-balance','trial-balance-detail')
     header_line=f"As at: {report['asOf']}"
     if kind not in ('chart-of-accounts','main-accounts'):
         header_line+=f" | {report['branchName']} | Currency: {report['currency']}"
@@ -59,7 +60,7 @@ def render(report):
     note=ParagraphStyle('Note',parent=normal,fontSize=7.3,leading=10,textColor=colors.HexColor('#46534c'))
     bold=ParagraphStyle('Bold',parent=normal,fontName='ReportBold')
     columns=report['columns']
-    if kind=='trial-balance': widths=[77,available-77-4*69,69,69,69,69]
+    if trial_balance: widths=[77,available-77-4*69,69,69,69,69]
     elif kind=='profit-loss': widths=[available-200,100,100]
     elif kind=='account-balances': widths=[87,available-207,120]
     elif len(columns)>1:
@@ -103,7 +104,7 @@ def render(report):
         data.append(cells)
         commands += [('LINEABOVE',(0,row_index),(-1,row_index),0.8,primary),
                      ('BACKGROUND',(0,row_index),(-1,row_index),secondary)]
-    if report['kind']=='trial-balance':
+    if trial_balance:
         row_index=len(data)
         data.append([Paragraph('TRIAL BALANCE OK' if report.get('balanced') else 'TRIAL BALANCE REQUIRES REVIEW',bold)]+['']*(len(columns)-1))
         commands.append(('SPAN',(0,row_index),(-1,row_index)))
@@ -115,8 +116,9 @@ def render(report):
     table=LongTable(data,colWidths=widths,repeatRows=1,hAlign='LEFT')
     table.setStyle(TableStyle(commands))
     story=[]
-    if report['kind']=='trial-balance':
-        story += [Paragraph('Current month: net movement. Year to date: closing balance including brought-forward posted entries.',note),Spacer(1,6)]
+    if trial_balance:
+        level='Detail lists individual chart accounts.' if kind=='trial-balance-detail' else 'Summary groups chart accounts by main account.'
+        story += [Paragraph(level+' Current month: net movement. Year to date: closing balance including brought-forward posted entries.',note),Spacer(1,6)]
     elif report['kind']=='profit-loss':
         story += [Paragraph('Credit income and profit appear in parentheses. Year to date starts '+escape(report['fiscalYearStart'])+'.',note),Spacer(1,6)]
     elif report['kind']=='chart-of-accounts':

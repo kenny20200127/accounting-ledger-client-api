@@ -4,8 +4,8 @@ export class ReportOptionsQuery {
   @IsUUID('4') companyId: string;
 }
 export class FinancialReportQuery extends ReportOptionsQuery {
-  @IsIn(['trial-balance', 'profit-loss', 'account-balances', 'chart-of-accounts', 'main-accounts'])
-  report: 'trial-balance' | 'profit-loss' | 'account-balances' | 'chart-of-accounts' | 'main-accounts' = 'trial-balance';
+  @IsIn(['trial-balance', 'trial-balance-detail', 'profit-loss', 'account-balances', 'chart-of-accounts', 'main-accounts'])
+  report: 'trial-balance' | 'trial-balance-detail' | 'profit-loss' | 'account-balances' | 'chart-of-accounts' | 'main-accounts' = 'trial-balance';
   @Matches(/^\d{4}-\d{2}-\d{2}$/) @IsDateString({ strict: true }) asOf: string;
   @IsOptional() @IsUUID('4') branchId?: string;
   @IsOptional() @IsUUID('4') fiscalYearId?: string;

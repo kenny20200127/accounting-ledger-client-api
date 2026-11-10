@@ -6,7 +6,7 @@ import { amount, cents, FinancialReport, groupCode, ReportRow } from './financia
 
 type AccountBalance = {
   accountCode: string; accountName: string; accountType: string; isHeader: boolean;
-  parentCode: string | null; mainDescription: string | null; month: string; ytd: string; closing: string; activity: number; monthActivity: number;
+  parentCode: string | null; mainCode: string; mainDescription: string; month: string; ytd: string; closing: string; activity: number; monthActivity: number;
 };
 @Injectable()
 export class FinancialReportsService {
@@ -122,16 +122,16 @@ export class FinancialReportsService {
           ${query.branchId ? 'AND h.branch_id=$5' : ''}
       )
       SELECT a.account_code AS "accountCode",a.account_name AS "accountName",t.code AS "accountType",a.is_header AS "isHeader",
-        p.account_code AS "parentCode",ma.description AS "mainDescription",
+        p.account_code AS "parentCode",ma.main_code AS "mainCode",ma.description AS "mainDescription",
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $3),0)::numeric(20,2)::text AS month,
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $4),0)::numeric(20,2)::text AS ytd,
         COALESCE(SUM(l.net),0)::numeric(20,2)::text AS closing,COUNT(l.account_id)::int AS activity,COUNT(l.account_id) FILTER(WHERE l.transaction_date >= $3)::int AS "monthActivity"
       FROM accounting.accounts a JOIN accounting.account_types t USING(account_type_id)
       LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
-      LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id
+      LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id AND ma.company_id=a.company_id
       LEFT JOIN posted_lines l ON l.account_id=a.account_id
       WHERE a.company_id=$1
-      GROUP BY a.account_id,a.account_code,a.account_name,t.code,a.is_header,p.account_code,ma.description ORDER BY a.account_code
+      GROUP BY a.account_id,a.account_code,a.account_name,t.code,a.is_header,p.account_code,ma.main_code,ma.description ORDER BY a.account_code
     `, query.branchId ? [query.companyId,query.asOf,monthStart,fiscalYearStart,query.branchId] : [query.companyId,query.asOf,monthStart,fiscalYearStart]);
     const labels = new Map<string,string>();
     for (const a of balances) if (a.isHeader) labels.set(groupCode(a),a.accountName);
@@ -153,18 +153,30 @@ export class FinancialReportsService {
       generatedAt:new Date().toISOString(),columns:[],rows:[],totals:[],warnings:[],
     };
     if (!balances.some(a => a.monthActivity > 0)) report.warnings.push('No posted transactions exist for the selected month.');
-    const nonzero=(g: {month:bigint;ytd:bigint;closing:bigint})=>query.includeZero || g.month!==0n || g.ytd!==0n || g.closing!==0n;
     const ordered=[...groups.values()].sort((a,b)=>a.code.localeCompare(b.code));
-    if (query.report==='trial-balance') {
-      report.title='Trial Balance Report';
-      report.columns=[{key:'accountCode',label:'Account No.'},{key:'description',label:'Description'},
+    if (query.report==='trial-balance' || query.report==='trial-balance-detail') {
+      const detail=query.report==='trial-balance-detail';
+      report.title=detail?'Detail Trial Balance':'Summary Trial Balance';
+      report.columns=[{key:'accountCode',label:detail?'Chart Account No.':'Main Account No.'},{key:'description',label:'Description'},
         {key:'monthDebit',label:'Current Month Debit',numeric:true},{key:'monthCredit',label:'Current Month Credit',numeric:true},
         {key:'ytdDebit',label:'Year to Date Debit',numeric:true},{key:'ytdCredit',label:'Year to Date Credit',numeric:true}];
+      const trialAccounts=new Map<string,{code:string;name:string;month:bigint;closing:bigint}>();
+      for (const account of balances) {
+        if (account.isHeader && !account.activity) continue;
+        const code=detail?account.accountCode:account.mainCode;
+        let row=trialAccounts.get(code);
+        if (!row) {
+          row={code,name:detail?account.accountName:account.mainDescription,month:0n,closing:0n};
+          trialAccounts.set(code,row);
+        }
+        row.month+=cents(account.month);row.closing+=cents(account.closing);
+      }
       const total={monthDebit:0n,monthCredit:0n,ytdDebit:0n,ytdCredit:0n};
-      for (const group of ordered.filter(nonzero)) {
-        const values={monthDebit:group.month>0n?group.month:0n,monthCredit:group.month<0n?-group.month:0n,
-          ytdDebit:group.closing>0n?group.closing:0n,ytdCredit:group.closing<0n?-group.closing:0n};
-        report.rows.push({accountCode:/^\d{5,6}$/.test(group.code)?group.code+'-00000':group.code,description:group.name,
+      for (const row of [...trialAccounts.values()].sort((a,b)=>a.code.localeCompare(b.code))) {
+        if (!query.includeZero && row.month===0n && row.closing===0n) continue;
+        const values={monthDebit:row.month>0n?row.month:0n,monthCredit:row.month<0n?-row.month:0n,
+          ytdDebit:row.closing>0n?row.closing:0n,ytdCredit:row.closing<0n?-row.closing:0n};
+        report.rows.push({accountCode:row.code,description:row.name,
           ...Object.fromEntries(Object.entries(values).map(([key,value])=>[key,amount(value)]))});
         for (const key of Object.keys(total) as (keyof typeof total)[]) total[key]+=values[key];
       }
