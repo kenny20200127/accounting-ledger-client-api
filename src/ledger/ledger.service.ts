@@ -51,6 +51,11 @@ export class LedgerService {
         `Ledger batch is out of balance by ${centsToAmount(difference)}. Total debits must equal total credits.`,
       );
     }
+    if (new Set(dto.lines.map((line) => line.accountCode)).size !== dto.lines.length) {
+      throw new BadRequestException(
+        'Each chart account can appear on only one line in a ledger batch.',
+      );
+    }
     if (dto.branchId) {
       const branch = await this.branches.findOne({ where: { branchId: dto.branchId } });
       if (!branch || branch.companyId !== dto.companyId) {
