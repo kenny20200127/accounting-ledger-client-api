@@ -209,6 +209,31 @@ export class LedgerService {
     });
   }
 
+  async stats(companyId: string) {
+    const [row] = await this.dataSource.query(
+      `SELECT
+         CURRENT_DATE::text AS "asOf",
+         COUNT(DISTINCT h.doc_no) FILTER (WHERE h.doc_date = CURRENT_DATE)::int AS "todayTransactions",
+         COUNT(DISTINCT h.doc_no) FILTER (WHERE h.doc_date >= date_trunc('week', CURRENT_DATE)::date)::int AS "weekTransactions",
+         COUNT(DISTINCT h.doc_no) FILTER (WHERE h.doc_date >= date_trunc('month', CURRENT_DATE)::date)::int AS "monthTransactions",
+         COUNT(DISTINCT h.doc_no) FILTER (WHERE h.doc_date >= date_trunc('year', CURRENT_DATE)::date)::int AS "yearTransactions",
+         COALESCE(SUM(h.debit_amount) FILTER (WHERE h.doc_date = CURRENT_DATE), 0)::numeric(20,2)::text AS "todayPosted",
+         COALESCE(SUM(h.debit_amount) FILTER (WHERE h.doc_date >= date_trunc('week', CURRENT_DATE)::date), 0)::numeric(20,2)::text AS "weekPosted",
+         COALESCE(SUM(h.debit_amount) FILTER (WHERE h.doc_date >= date_trunc('month', CURRENT_DATE)::date), 0)::numeric(20,2)::text AS "monthPosted",
+         COALESCE(SUM(h.debit_amount) FILTER (WHERE h.doc_date >= date_trunc('year', CURRENT_DATE)::date), 0)::numeric(20,2)::text AS "yearPosted"
+       FROM ledger.histories h
+       WHERE h.company_id = $1`,
+      [companyId],
+    );
+    return {
+      asOf: row.asOf,
+      today: { transactions: row.todayTransactions, posted: row.todayPosted },
+      week: { transactions: row.weekTransactions, posted: row.weekPosted },
+      month: { transactions: row.monthTransactions, posted: row.monthPosted },
+      year: { transactions: row.yearTransactions, posted: row.yearPosted },
+    };
+  }
+
   async listHistories(query: CompanyListQueryDto) {
     const term = query.q?.trim();
     const pattern = term ? `%${term.replace(/[\\%_]/g, '\\$&')}%` : undefined;

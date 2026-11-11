@@ -27,6 +27,10 @@ class TrialBalanceQueryDto {
   @IsDateString() asOf: string;
 }
 
+class LedgerStatsQueryDto {
+  @IsUUID('4') companyId: string;
+}
+
 @ApiTags('ledger')
 @ApiBearerAuth()
 @Controller()
@@ -56,6 +60,11 @@ export class LedgerController {
     @Query('year') year?: string,
   ) {
     return this.service.listMonthlyBalances(companyId, year);
+  }
+
+  @Get('ledger-batches/stats')
+  stats(@Query() query: LedgerStatsQueryDto) {
+    return this.service.stats(query.companyId);
   }
 
   @Get('ledger-batches/:id')
