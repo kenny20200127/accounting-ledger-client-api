@@ -38,6 +38,14 @@ export class Company {
   fiscalYearStartMonth: number;
   @Column({ name: 'fiscal_year_start_day', default: 1 })
   fiscalYearStartDay: number;
+  @Column({
+    name: 'profit_and_loss_amount',
+    type: 'numeric',
+    precision: 20,
+    scale: 2,
+    default: 0,
+  })
+  profitAndLossAmount: string;
 
   @PrimaryGeneratedColumn('uuid', { name: 'company_id' })
   companyId: string;

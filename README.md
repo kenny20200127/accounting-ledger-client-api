@@ -60,7 +60,7 @@ Optional values are `SEED_ADMIN_COMPANY_ID`, `SEED_ADMIN_FIRST_NAME`, and `SEED_
 
 ## Financial reports and PDF downloads
 
-Open **Reports**, choose Trial Balance, Profit & Loss, or Balance of Account, select the **As at** date, and use **Download PDF**. Previews update when filters change; PDF downloads contain every matching row, including rows outside the current 50-row preview page. Branch, fiscal year, and zero-balance filters are available. Balance of Account includes presets for bank/cash balances, accruals/expenses, directors current accounts, long-term investments, staff debtors, insurance company creditors, and client debtors when their legacy account codes exist. Custom selections support up to 30 account groups.
+Open **Reports**, choose Trial Balance, Profit & Loss, or Balance Sheet, select the **As at** date, and use **Download PDF**. Previews update when filters change; PDF downloads contain every matching row, including rows outside the current 50-row preview page. Branch, fiscal year, and zero-balance filters are available. Balance Sheet includes presets for bank/cash balances, accruals/expenses, directors current accounts, long-term investments, staff debtors, insurance company creditors, and client debtors when their legacy account codes exist. Custom selections support up to 30 account groups.
 
 These formats follow the supplied 24-page scanned report reference. Company details, account descriptions, currency, report dates, printed totals, and page numbers come from the new application. The scanned monetary figures are not imported as transactions.
 
@@ -68,7 +68,7 @@ Calculations:
 
 - Trial Balance groups legacy detail accounts under their six-digit main-account codes. Current month shows net posted movement from the first of the month through the selected date. Year-to-date columns show closing balances through that date, including brought-forward posted entries. Each group is split into a debit or credit balance after aggregation; headers are not counted again. Totals and a balance status are included.
 - Profit & Loss shows current-month and fiscal-year-to-date income, operating expenses, depreciation charges, and net profit/loss. Credit income and profit appear in parentheses, matching the scanned convention. Income and expense classification uses the chart of accounts. Fiscal years are detected from the selected date; select one explicitly if date ranges overlap.
-- Balance of Account lists each matching detail account and its signed closing balance through the selected date. Bank/cash or other groups can be selected together. Totals cover all selected accounts.
+- Balance Sheet lists each matching detail account and its signed closing balance through the selected date. Bank/cash or other groups can be selected together. Totals cover all selected accounts. A Profit & Loss line is added from the chart account named Profit and Loss, using the total saved in Company Settings; posted movements on that account are replaced by the saved figure.
 
 Only `POSTED` and `REVERSED` journal entries affect the figures. A reversed original remains in the report alongside its posted offsetting reversal. Draft/pending/approved entries and transactions after the cutoff are excluded. Reports identify unposted journals, months with no posted transactions, missing fiscal-year setup, and retained legacy balance snapshots. For example, the migrated ledger currently has no posted transactions in March 2026; it therefore cannot reproduce the March movements and historical figures in the scan until the remaining old data is reconciled. No old snapshot is silently assigned a date or added to live postings.
 
@@ -76,9 +76,9 @@ API endpoints require a bearer token and `REPORTS.canView`:
 
 - `GET /api/v1/reports/financial/options?companyId=<uuid>` returns account groups, branch choices, and fiscal-year choices.
 - `GET /api/v1/reports/financial?companyId=<uuid>&report=trial-balance&asOf=2026-03-31` returns the structured preview, totals, and data notes.
-- `GET /api/v1/reports/financial/pdf?companyId=<uuid>&report=account-balances&asOf=2026-03-31&groupCodes=156000,157000` downloads an A4 PDF.
+- `GET /api/v1/reports/financial/pdf?companyId=<uuid>&report=balance-sheet&asOf=2026-03-31&groupCodes=156000,157000` downloads an A4 PDF.
 
-`report` accepts `trial-balance`, `profit-loss`, or `account-balances`. Optional filters are `branchId`, `fiscalYearId`, and `includeZero=true|false`. `groupCodes` is a comma-separated list supported only by Balance of Account; all IDs and dates are validated and scoped to the selected company. `asOf` must be a real `YYYY-MM-DD` calendar date. Existing `/api/v1/reports/trial-balance` and `/api/v1/ledger` routes retain their previous contracts.
+`report` accepts `trial-balance`, `profit-loss`, or `balance-sheet`. Optional filters are `branchId`, `fiscalYearId`, and `includeZero=true|false`. `groupCodes` is a comma-separated list supported only by Balance Sheet; all IDs and dates are validated and scoped to the selected company. `asOf` must be a real `YYYY-MM-DD` calendar date. Existing `/api/v1/reports/trial-balance` and `/api/v1/ledger` routes retain their previous contracts.
 
 PDF rendering uses the ReportLab worker in `scripts/render_financial_report.py`. Install the dependency on each app host once:
 

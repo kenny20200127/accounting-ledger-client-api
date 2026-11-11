@@ -14,7 +14,8 @@ export class FinancialReportsService {
 
   private async company(companyId: string) {
     const [company] = await this.dataSource.query(`SELECT company_name AS "companyName", COALESCE(address,'') AS address,
-      logo_data AS "logoData", primary_color AS "primaryColor", secondary_color AS "secondaryColor", base_currency AS currency FROM core.companies WHERE company_id=$1`, [companyId]);
+      logo_data AS "logoData", primary_color AS "primaryColor", secondary_color AS "secondaryColor", base_currency AS currency,
+      COALESCE(profit_and_loss_amount,0)::numeric(20,2)::text AS "profitAndLossAmount" FROM core.companies WHERE company_id=$1`, [companyId]);
     if (!company) throw new NotFoundException('Company not found.');
     return company;
   }
@@ -91,7 +92,7 @@ export class FinancialReportsService {
 
   async generate(query: FinancialReportQuery): Promise<FinancialReport> {
     const company = await this.company(query.companyId);
-    if (query.groupCodes && query.report !== 'account-balances') throw new BadRequestException('Account-group filtering is available for the Balance of Account report.');
+    if (query.groupCodes && query.report !== 'balance-sheet') throw new BadRequestException('Account-group filtering is available for the Balance Sheet report.');
     let branchName = 'All branches';
     if (query.branchId) {
       const [branch] = await this.dataSource.query('SELECT branch_name FROM core.branches WHERE branch_id=$1 AND company_id=$2', [query.branchId,query.companyId]);
@@ -200,15 +201,42 @@ export class FinancialReportsService {
       }
       report.totals=[{label:'(Profit) / Loss',values:{monthAmount:amount(monthTotal),ytdAmount:amount(ytdTotal)}}];
     } else {
-      report.title='Balance of Account';
+      report.title='Balance Sheet';
       report.columns=[{key:'accountCode',label:'Account No.'},{key:'description',label:'Description'},{key:'balance',label:'Balance',numeric:true}];
+      const [profitLossAccount]: {
+        accountCode: string; accountName: string; parentCode: string | null; mainCode: string | null; mainDescription: string | null;
+      }[] = await this.dataSource.query(`SELECT a.account_code AS "accountCode",a.account_name AS "accountName",
+        p.account_code AS "parentCode",ma.main_code AS "mainCode",ma.description AS "mainDescription"
+        FROM accounting.accounts a
+        LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
+        LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id AND ma.company_id=a.company_id
+        WHERE a.company_id=$1 AND NOT a.is_header AND a.account_name ILIKE '%profit%loss%'
+        ORDER BY a.account_code LIMIT 1`,[query.companyId]);
+      const profitLossCents=cents(String(company.profitAndLossAmount ?? '0'));
+      const profitLossGroup=profitLossAccount ? groupCode(profitLossAccount) : null;
+      const profitLossIncluded=!!profitLossAccount && (!query.groupCodes || (profitLossGroup!==null && query.groupCodes.includes(profitLossGroup)));
       let total=0n;
       for (const a of balances) {
         if ((a.isHeader && !a.activity) || (query.groupCodes && !query.groupCodes.includes(groupCode(a)))) continue;
+        if (profitLossAccount && a.accountCode===profitLossAccount.accountCode) continue;
         const closing=cents(a.closing);
         if (!query.includeZero && closing===0n) continue;
         report.rows.push({accountCode:a.accountCode,description:a.accountName,balance:amount(closing)});
         total+=closing;
+      }
+      const profitLossBalance=profitLossAccount ? balances.find(a=>a.accountCode===profitLossAccount.accountCode) : undefined;
+      if (profitLossAccount && !profitLossIncluded) {
+        if (profitLossCents!==0n) report.warnings.push('The Profit and Loss line is hidden because its account group is not selected.');
+      } else if (profitLossAccount) {
+        if (query.includeZero || profitLossCents!==0n) {
+          report.rows.push({description:'Profit & Loss',isSection:true});
+          report.rows.push({accountCode:profitLossAccount.accountCode,description:profitLossAccount.accountName,balance:amount(profitLossCents)});
+          total+=profitLossCents;
+        }
+        if (profitLossBalance && cents(profitLossBalance.closing)!==0n)
+          report.warnings.push('Posted movements on the Profit and Loss account are replaced by the total saved in company settings.');
+      } else if (profitLossCents!==0n) {
+        report.warnings.push('No chart account named Profit and Loss was found, so the profit and loss total was not included.');
       }
       report.totals=[{label:'Total',values:{balance:amount(total)}}];
     }

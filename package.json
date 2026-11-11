@@ -27,7 +27,8 @@
     "migrate:company-tenancy": "node scripts/migrate-company-tenancy.cjs",
     "migrate:error-logs": "node scripts/migrate-error-logs.cjs",
     "migrate:charts": "node scripts/migrate-chart-of-accounts.cjs",
-    "migrate:company-menus": "node scripts/migrate-company-menus.cjs"
+    "migrate:company-menus": "node scripts/migrate-company-menus.cjs",
+    "migrate:company-profit-loss": "node scripts/migrate-company-profit-loss.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

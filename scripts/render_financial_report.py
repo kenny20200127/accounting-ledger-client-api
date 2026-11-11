@@ -62,7 +62,7 @@ def render(report):
     columns=report['columns']
     if trial_balance: widths=[77,available-77-4*69,69,69,69,69]
     elif kind=='profit-loss': widths=[available-200,100,100]
-    elif kind=='account-balances': widths=[87,available-207,120]
+    elif kind=='balance-sheet': widths=[87,available-207,120]
     elif len(columns)>1:
         first=min(130,available*0.2)
         widths=[first]+[(available-first)/(len(columns)-1)]*(len(columns)-1)
@@ -125,6 +125,8 @@ def render(report):
         story += [Paragraph('Chart accounts are grouped by main account.',note),Spacer(1,6)]
     elif report['kind']=='main-accounts':
         story += [Paragraph('Main accounts define the code range and classification used by their chart accounts.',note),Spacer(1,6)]
+    elif report['kind']=='balance-sheet':
+        story += [Paragraph('Profit and loss uses the chart account named Profit and Loss with the total saved in company settings.',note),Spacer(1,6)]
     for warning in report.get('warnings',[]):
         story.append(Paragraph(escape(warning),note))
     if report.get('warnings'):story.append(Spacer(1,8))
@@ -145,7 +147,7 @@ def render(report):
             canvas.drawRightString(width-32,y-8,'Fiscal year start: '+report['fiscalYearStart'])
         canvas.setStrokeColor(primary);canvas.line(32,y-13,width-32,y-13)
         canvas.setFillColor(colors.HexColor('#58655c'));canvas.setFont('Report',7)
-        canvas.drawString(32,24,'Account structure as configured' if kind in ('chart-of-accounts','main-accounts') else 'Based on posted journal entries')
+        canvas.drawString(32,24,'Account structure as configured' if kind in ('chart-of-accounts','main-accounts') else ('Posted balances with the company profit and loss total' if kind=='balance-sheet' else 'Based on posted journal entries'))
         canvas.drawRightString(width-32,24,'Page '+str(document.page))
         canvas.restoreState()
     doc.build(story,onFirstPage=header_footer,onLaterPages=header_footer)

@@ -1,6 +1,7 @@
 import {
   IsEmail,
   IsInt,
+  IsNumberString,
   Min,
   Max,
   IsUrl,
@@ -36,6 +37,7 @@ export class CreateCompanyDto {
   @IsOptional() @Matches(/^#[0-9a-fA-F]{6}$/) secondaryColor?: string;
   @IsOptional() @IsInt() @Min(1) @Max(12) fiscalYearStartMonth?: number;
   @IsOptional() @IsInt() @Min(1) @Max(28) fiscalYearStartDay?: number;
+  @IsOptional() @IsNumberString() profitAndLossAmount?: string;
 
   @IsString()
   @IsNotEmpty()

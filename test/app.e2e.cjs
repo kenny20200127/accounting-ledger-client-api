@@ -206,21 +206,21 @@ test('financial report previews and PDF downloads validate filters and scoped co
   const base='/api/v1/reports/financial?companyId='+company.company_id+'&asOf=2026-03-31';
   const options=(await get('/api/v1/reports/financial/options?companyId='+company.company_id).expect(200)).body;
   assert.ok(options.groups.some(g=>g.code==='156000'));
-  for(const kind of ['trial-balance','trial-balance-detail','profit-loss','account-balances','chart-of-accounts','main-accounts']) {
+  for(const kind of ['trial-balance','trial-balance-detail','profit-loss','balance-sheet','chart-of-accounts','main-accounts']) {
     const result=(await get(base+'&report='+kind).expect(200)).body;
     assert.equal(result.kind,kind);assert.ok(Array.isArray(result.rows));assert.equal(result.companyName,options.company.companyName);
   }
-  for(const extra of ['&report=other','&includeZero=bad','&groupCodes=unknown&report=account-balances','&groupCodes=156000','&report=account-balances&groupCodes=']) {
+  for(const extra of ['&report=other','&includeZero=bad','&groupCodes=unknown&report=balance-sheet','&groupCodes=156000','&report=balance-sheet&groupCodes=']) {
     await get(base+extra).expect(400);
   }
   for(const key of ['branchId','fiscalYearId'])await get(base+'&'+key+'='+randomUUID()).expect(403);
   await get(base.replace('2026-03-31','2026-02-30')).expect(400);
   await get(base.replace('2026-03-31','2026-03-31T12:00:00Z')).expect(400);
   await get(base.replace(company.company_id,randomUUID())).expect(403);
-  const pdf=await get(base.replace('/financial?','/financial/pdf?')+'&report=account-balances&groupCodes=156000,157000')
+  const pdf=await get(base.replace('/financial?','/financial/pdf?')+'&report=balance-sheet&groupCodes=156000,157000')
     .buffer(true).parse((response,callback)=>{const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('end',()=>callback(null,Buffer.concat(chunks)));}).expect(200);
   assert.match(pdf.headers['content-type'],/application\/pdf/);
-  assert.match(pdf.headers['content-disposition'],/account-balances-2026-03-31\.pdf/);
+  assert.match(pdf.headers['content-disposition'],/balance-sheet-2026-03-31\.pdf/);
   assert.equal(pdf.body.subarray(0,5).toString(),'%PDF-');
 });
 
@@ -282,7 +282,7 @@ test('financial reports compute month, fiscal-year, closing balances, net profit
     assert.deepEqual(pnl.totals[0].values,{monthAmount:'-50.00',ytdAmount:'-250.00'});
     assert.ok(pnl.warnings.includes('1 unposted journals through this date are excluded.'));
     const branch=await service.generate({...base,report:'profit-loss',branchId:branchA});assert.equal(branch.totals[0].values.monthAmount,'-60.00');
-    const detail=await service.generate({...base,report:'account-balances',groupCodes:['156000']});
+    const detail=await service.generate({...base,report:'balance-sheet',groupCodes:['156000']});
     assert.equal(detail.rows.length,1);assert.equal(detail.totals[0].values.balance,'1250.00');
     assert.equal(detail.rows[0].accountCode,'156000-00001');
     const options=await service.options(cid);assert.equal(options.groups.length,4);assert.equal(options.groups.find(g=>g.code==='156000').name,'Bank balances');
@@ -305,7 +305,7 @@ test('financial reports compute month, fiscal-year, closing balances, net profit
     const alternate=await service.generate({...base,report:'profit-loss',fiscalYearId:overlapping});assert.equal(alternate.fiscalYearStart,'2025-07-01');
     const independent=await service.generate({...base,report:'chart-of-accounts'});assert.equal(independent.rows.filter(row=>row.isSection).length,4);
     await assert.rejects(()=>service.generate({...base,report:'profit-loss',branchId:randomUUID()}),/Branch must belong/);
-    await assert.rejects(()=>service.generate({...base,report:'account-balances',groupCodes:['missing'],fiscalYearId:fy}),/account groups/);
+    await assert.rejects(()=>service.generate({...base,report:'balance-sheet',groupCodes:['missing'],fiscalYearId:fy}),/account groups/);
   }finally{await runner.rollbackTransaction();await runner.release();}
 });
 
