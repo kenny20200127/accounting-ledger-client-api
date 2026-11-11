@@ -46,6 +46,13 @@ export class Company {
     default: 0,
   })
   profitAndLossAmount: string;
+  @Column({
+    name: 'profit_and_loss_account_code',
+    type: 'varchar',
+    length: 30,
+    nullable: true,
+  })
+  profitAndLossAccountCode: string | null;
 
   @PrimaryGeneratedColumn('uuid', { name: 'company_id' })
   companyId: string;

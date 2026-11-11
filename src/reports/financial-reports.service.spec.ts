@@ -27,20 +27,17 @@ function fixture(
   balances: ReturnType<typeof balance>[],
   options: {
     profitAndLossAmount?: string;
-    profitLossAccount?: {
-      accountCode: string; accountName: string; parentCode: string | null;
-      mainCode: string | null; mainDescription: string | null;
-    };
+    profitAndLossAccountCode?: string | null;
   } = {},
 ) {
   const query = jest.fn(async (sql: string) => {
     if (sql.includes('FROM core.companies')) return [{
       companyName: 'Test company', address: '', currency: 'NGN',
       profitAndLossAmount: options.profitAndLossAmount ?? '0.00',
+      profitAndLossAccountCode: options.profitAndLossAccountCode ?? null,
     }];
     if (sql.includes('FROM core.branches')) return [{ branch_name: 'Test branch' }];
     if (sql.includes('FROM accounting.fiscal_years')) return [{ start: '2026-01-01', end: '2026-12-31' }];
-    if (sql.includes('%profit%loss%')) return options.profitLossAccount ? [options.profitLossAccount] : [];
     if (sql.includes('WITH posted_lines')) return balances;
     if (sql.includes('SELECT COUNT(*)::int AS count')) return [{ count: 0 }];
     if (sql.includes('to_regclass')) return [{ exists: false }];
@@ -155,37 +152,78 @@ describe('trial balance reports', () => {
 });
 
 describe('balance sheet report', () => {
-  const profitLossAccount = {
-    accountCode: '310000-00009', accountName: 'Profit and Loss',
-    parentCode: null, mainCode: '310000', mainDescription: 'Capital',
-  };
+  const profitLoss = () => balance({
+    accountCode: '310000-00009', accountName: 'Profit and Loss', accountType: 'EQUITY',
+    mainCode: '310000', mainDescription: 'Capital',
+  });
 
-  it('adds the profit and loss line from company settings using the chart account code and description', async () => {
-    const { service, query } = fixture(accounts(), { profitAndLossAmount: '250.00', profitLossAccount });
+  it('totals assets and liabilities plus equity, with the profit and loss line in equity', async () => {
+    const { service } = fixture([...accounts(), profitLoss()], {
+      profitAndLossAmount: '250.00',
+      profitAndLossAccountCode: '310000-00009',
+    });
     const report = await service.generate({ ...base, report: 'balance-sheet' });
     expect(report.title).toBe('Balance Sheet');
+    expect(report.rows.filter(row => row.isSection).map(row => row.description)).toEqual(['Assets', 'Liabilities', 'Equity']);
     expect(report.rows.filter(row => row.accountCode === '310000-00009')).toEqual([
       { accountCode: '310000-00009', description: 'Profit and Loss', balance: '250.00' },
     ]);
-    expect(report.rows.find(row => row.isSection && row.description === 'Profit & Loss')).toBeTruthy();
-    expect(report.totals[0].values).toEqual({ balance: '250.00' });
-    expect(query).toHaveBeenCalledWith(expect.stringContaining('%profit%loss%'), [companyId]);
+    expect(report.rows.find(row => row.isTotal && row.description === 'Total Assets')?.balance).toBe('1060.15');
+    expect(report.rows.find(row => row.isTotal && row.description === 'Total Equity')?.balance).toBe('-810.15');
+    expect(report.totals).toEqual([
+      { label: 'Total Assets', values: { balance: '1060.15' } },
+      { label: 'Total Liabilities and Equity', values: { balance: '-810.15' } },
+    ]);
+    expect(report.warnings).toContain('Balance sheet does not balance: total assets differ from total liabilities and equity.');
   });
 
-  it('warns and excludes the total when no Profit and Loss chart account exists', async () => {
+  it('shows the saved total in equity when no chart account is selected', async () => {
     const { service } = fixture(accounts(), { profitAndLossAmount: '250.00' });
     const report = await service.generate({ ...base, report: 'balance-sheet' });
-    expect(report.rows.some(row => row.accountCode === '310000-00009')).toBe(false);
-    expect(report.totals[0].values).toEqual({ balance: '0.00' });
-    expect(report.warnings).toContain('No chart account named Profit and Loss was found, so the profit and loss total was not included.');
+    expect(report.rows.find(row => row.description === 'Profit and loss total')).toEqual({
+      description: 'Profit and loss total', balance: '250.00',
+    });
+    expect(report.totals[0].values).toEqual({ balance: '1060.15' });
+    expect(report.totals[1].values).toEqual({ balance: '-810.15' });
+    expect(report.warnings).toContain('Select a Profit and Loss chart account in Company Settings to show its chart code and description.');
+  });
+
+  it('shows the saved total when the selected chart account is missing', async () => {
+    const { service } = fixture(accounts(), {
+      profitAndLossAmount: '250.00',
+      profitAndLossAccountCode: '999999-00001',
+    });
+    const report = await service.generate({ ...base, report: 'balance-sheet' });
+    expect(report.rows.some(row => row.description === 'Profit and loss total')).toBe(true);
+    expect(report.totals[1].values).toEqual({ balance: '-810.15' });
+    expect(report.warnings).toContain('The Profit and Loss chart account selected in Company Settings was not found, so the saved total is shown without its chart code.');
   });
 
   it('hides the profit and loss line when its account group is not selected', async () => {
-    const { service } = fixture(accounts(), { profitAndLossAmount: '250.00', profitLossAccount });
+    const { service } = fixture([...accounts(), profitLoss()], {
+      profitAndLossAmount: '250.00',
+      profitAndLossAccountCode: '310000-00009',
+    });
     const report = await service.generate({ ...base, report: 'balance-sheet', groupCodes: ['156000'] });
     expect(report.rows.some(row => row.accountCode === '310000-00009')).toBe(false);
-    expect(report.totals[0].values).toEqual({ balance: '40.10' });
+    expect(report.totals).toEqual([
+      { label: 'Total Assets', values: { balance: '1100.25' } },
+      { label: 'Total Liabilities and Equity', values: { balance: '-1060.15' } },
+    ]);
     expect(report.warnings).toContain('The Profit and Loss line is hidden because its account group is not selected.');
+  });
+
+  it('replaces posted movements on the selected account with the saved total', async () => {
+    const { service } = fixture([
+      ...accounts(),
+      balance({ accountCode: '310000-00009', accountName: 'Profit and Loss', accountType: 'EQUITY', mainCode: '310000', mainDescription: 'Capital', closing: '77.00', activity: 1 }),
+    ], { profitAndLossAmount: '250.00', profitAndLossAccountCode: '310000-00009' });
+    const report = await service.generate({ ...base, report: 'balance-sheet' });
+    expect(report.rows.filter(row => row.accountCode === '310000-00009')).toEqual([
+      { accountCode: '310000-00009', description: 'Profit and Loss', balance: '250.00' },
+    ]);
+    expect(report.totals[1].values).toEqual({ balance: '-810.15' });
+    expect(report.warnings).toContain('Posted movements on the Profit and Loss account are replaced by the total saved in company settings.');
   });
 });
 

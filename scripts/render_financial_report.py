@@ -126,7 +126,7 @@ def render(report):
     elif report['kind']=='main-accounts':
         story += [Paragraph('Main accounts define the code range and classification used by their chart accounts.',note),Spacer(1,6)]
     elif report['kind']=='balance-sheet':
-        story += [Paragraph('Profit and loss uses the chart account named Profit and Loss with the total saved in company settings.',note),Spacer(1,6)]
+        story += [Paragraph('Assets, liabilities, and equity are totaled separately. The profit and loss line uses the chart account selected in company settings and the total saved there.',note),Spacer(1,6)]
     for warning in report.get('warnings',[]):
         story.append(Paragraph(escape(warning),note))
     if report.get('warnings'):story.append(Spacer(1,8))

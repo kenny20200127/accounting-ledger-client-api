@@ -15,7 +15,8 @@ export class FinancialReportsService {
   private async company(companyId: string) {
     const [company] = await this.dataSource.query(`SELECT company_name AS "companyName", COALESCE(address,'') AS address,
       logo_data AS "logoData", primary_color AS "primaryColor", secondary_color AS "secondaryColor", base_currency AS currency,
-      COALESCE(profit_and_loss_amount,0)::numeric(20,2)::text AS "profitAndLossAmount" FROM core.companies WHERE company_id=$1`, [companyId]);
+      COALESCE(profit_and_loss_amount,0)::numeric(20,2)::text AS "profitAndLossAmount",
+      profit_and_loss_account_code AS "profitAndLossAccountCode" FROM core.companies WHERE company_id=$1`, [companyId]);
     if (!company) throw new NotFoundException('Company not found.');
     return company;
   }
@@ -203,42 +204,63 @@ export class FinancialReportsService {
     } else {
       report.title='Balance Sheet';
       report.columns=[{key:'accountCode',label:'Account No.'},{key:'description',label:'Description'},{key:'balance',label:'Balance',numeric:true}];
-      const [profitLossAccount]: {
-        accountCode: string; accountName: string; parentCode: string | null; mainCode: string | null; mainDescription: string | null;
-      }[] = await this.dataSource.query(`SELECT a.account_code AS "accountCode",a.account_name AS "accountName",
-        p.account_code AS "parentCode",ma.main_code AS "mainCode",ma.description AS "mainDescription"
-        FROM accounting.accounts a
-        LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
-        LEFT JOIN accounting.main_accounts ma ON ma.main_account_id=a.main_account_id AND ma.company_id=a.company_id
-        WHERE a.company_id=$1 AND NOT a.is_header AND a.account_name ILIKE '%profit%loss%'
-        ORDER BY a.account_code LIMIT 1`,[query.companyId]);
+      const profitLossCode=company.profitAndLossAccountCode ? String(company.profitAndLossAccountCode) : '';
+      const profitLossBalance=profitLossCode ? balances.find(a=>a.accountCode===profitLossCode) : undefined;
       const profitLossCents=cents(String(company.profitAndLossAmount ?? '0'));
-      const profitLossGroup=profitLossAccount ? groupCode(profitLossAccount) : null;
-      const profitLossIncluded=!!profitLossAccount && (!query.groupCodes || (profitLossGroup!==null && query.groupCodes.includes(profitLossGroup)));
-      let total=0n;
-      for (const a of balances) {
-        if ((a.isHeader && !a.activity) || (query.groupCodes && !query.groupCodes.includes(groupCode(a)))) continue;
-        if (profitLossAccount && a.accountCode===profitLossAccount.accountCode) continue;
-        const closing=cents(a.closing);
-        if (!query.includeZero && closing===0n) continue;
-        report.rows.push({accountCode:a.accountCode,description:a.accountName,balance:amount(closing)});
-        total+=closing;
-      }
-      const profitLossBalance=profitLossAccount ? balances.find(a=>a.accountCode===profitLossAccount.accountCode) : undefined;
-      if (profitLossAccount && !profitLossIncluded) {
-        if (profitLossCents!==0n) report.warnings.push('The Profit and Loss line is hidden because its account group is not selected.');
-      } else if (profitLossAccount) {
-        if (query.includeZero || profitLossCents!==0n) {
-          report.rows.push({description:'Profit & Loss',isSection:true});
-          report.rows.push({accountCode:profitLossAccount.accountCode,description:profitLossAccount.accountName,balance:amount(profitLossCents)});
-          total+=profitLossCents;
+      const profitLossGroup=profitLossBalance ? groupCode(profitLossBalance) : null;
+      const profitLossIncluded=!!profitLossBalance && (!query.groupCodes || (profitLossGroup!==null && query.groupCodes.includes(profitLossGroup)));
+      const sections=[
+        {type:'ASSET',title:'Assets',totalLabel:'Total Assets'},
+        {type:'LIABILITY',title:'Liabilities',totalLabel:'Total Liabilities'},
+        {type:'EQUITY',title:'Equity',totalLabel:'Total Equity'},
+      ];
+      const sectionTotals=new Map<string,bigint>();
+      for (const section of sections) {
+        report.rows.push({description:section.title,isSection:true});
+        let sectionTotal=0n;
+        for (const a of balances) {
+          if (a.accountType!==section.type) continue;
+          if ((a.isHeader && !a.activity) || (query.groupCodes && !query.groupCodes.includes(groupCode(a)))) continue;
+          if (profitLossBalance && a.accountCode===profitLossBalance.accountCode) continue;
+          const closing=cents(a.closing);
+          if (!query.includeZero && closing===0n) continue;
+          report.rows.push({accountCode:a.accountCode,description:a.accountName,balance:amount(closing)});
+          sectionTotal+=closing;
         }
-        if (profitLossBalance && cents(profitLossBalance.closing)!==0n)
-          report.warnings.push('Posted movements on the Profit and Loss account are replaced by the total saved in company settings.');
-      } else if (profitLossCents!==0n) {
-        report.warnings.push('No chart account named Profit and Loss was found, so the profit and loss total was not included.');
+        if (section.type==='EQUITY') {
+          const addUncodedProfitLoss=()=>{
+            if (!query.includeZero && profitLossCents===0n) return;
+            report.rows.push({description:'Profit and loss total',balance:amount(profitLossCents)});
+            sectionTotal+=profitLossCents;
+          };
+          if (!profitLossCode) {
+            addUncodedProfitLoss();
+            if (profitLossCents!==0n) report.warnings.push('Select a Profit and Loss chart account in Company Settings to show its chart code and description.');
+          } else if (!profitLossBalance) {
+            addUncodedProfitLoss();
+            report.warnings.push('The Profit and Loss chart account selected in Company Settings was not found, so the saved total is shown without its chart code.');
+          } else if (!profitLossIncluded) {
+            if (profitLossCents!==0n) report.warnings.push('The Profit and Loss line is hidden because its account group is not selected.');
+          } else {
+            if (query.includeZero || profitLossCents!==0n) {
+              report.rows.push({accountCode:profitLossBalance.accountCode,description:profitLossBalance.accountName,balance:amount(profitLossCents)});
+              sectionTotal+=profitLossCents;
+            }
+            if (cents(profitLossBalance.closing)!==0n)
+              report.warnings.push('Posted movements on the Profit and Loss account are replaced by the total saved in company settings.');
+          }
+        }
+        report.rows.push({description:section.totalLabel,isTotal:true,balance:amount(sectionTotal)});
+        sectionTotals.set(section.type,sectionTotal);
       }
-      report.totals=[{label:'Total',values:{balance:amount(total)}}];
+      const assetTotal=sectionTotals.get('ASSET') ?? 0n;
+      const liabilitiesAndEquity=(sectionTotals.get('LIABILITY') ?? 0n)+(sectionTotals.get('EQUITY') ?? 0n);
+      report.totals=[
+        {label:'Total Assets',values:{balance:amount(assetTotal)}},
+        {label:'Total Liabilities and Equity',values:{balance:amount(liabilitiesAndEquity)}},
+      ];
+      if (assetTotal!==liabilitiesAndEquity)
+        report.warnings.push('Balance sheet does not balance: total assets differ from total liabilities and equity.');
     }
     const [drafts]=await this.dataSource.query(`SELECT COUNT(*)::int AS count FROM accounting.journal_entries
       WHERE company_id=$1 AND transaction_date <= $2 AND status IN('DRAFT','PENDING','APPROVED') ${query.branchId ? 'AND branch_id=$3' : ''}`,query.branchId ? [query.companyId,query.asOf,query.branchId] : [query.companyId,query.asOf]);

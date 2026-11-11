@@ -38,6 +38,7 @@ export class CreateCompanyDto {
   @IsOptional() @IsInt() @Min(1) @Max(12) fiscalYearStartMonth?: number;
   @IsOptional() @IsInt() @Min(1) @Max(28) fiscalYearStartDay?: number;
   @IsOptional() @IsNumberString() profitAndLossAmount?: string;
+  @IsOptional() @IsString() @Length(1, 30) profitAndLossAccountCode?: string;
 
   @IsString()
   @IsNotEmpty()
