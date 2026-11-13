@@ -69,6 +69,18 @@ export class LedgerHistory {
   @Column({ name: 'legacy_ref', type: 'varchar', length: 120, nullable: true })
   legacyRef?: string | null;
 
+  @Column({ name: 'reversal_of_doc_no', type: 'varchar', length: 30, nullable: true })
+  reversalOfDocNo?: string | null;
+
+  @Column({ name: 'reversed_by_doc_no', type: 'varchar', length: 30, nullable: true })
+  reversedByDocNo?: string | null;
+
+  @Column({ name: 'reversed_by', type: 'uuid', nullable: true })
+  reversedBy?: string | null;
+
+  @Column({ name: 'reversed_at', type: 'timestamptz', nullable: true })
+  reversedAt?: Date | null;
+
   @Column({ name: 'created_by', type: 'uuid', nullable: true })
   createdBy?: string | null;
 

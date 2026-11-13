@@ -42,6 +42,11 @@ export class LedgerController {
     return this.service.createBatch(dto, req.actor.userId);
   }
 
+  @Post('ledger-batches/:id/reverse')
+  reverseBatch(@Param('id', new ParseIntPipe()) id: string, @Req() req: any) {
+    return this.service.reverseBatch(id, req.actor.userId);
+  }
+
   @Get('ledger-batches')
   listHistories(@Query() query: CompanyListQueryDto) {
     return this.service.listHistories(query);

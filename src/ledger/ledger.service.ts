@@ -209,6 +209,149 @@ export class LedgerService {
     });
   }
 
+  async reverseBatch(historyId: string, userId?: string) {
+    return this.dataSource.transaction(async manager => {
+      const rows: LedgerHistoryRow[] = await manager.query(
+        `SELECT h.history_id AS "historyId", h.company_id AS "companyId",
+                h.account_id AS "accountId", h.branch_id AS "branchId",
+                h.doc_no AS "docNo", h.doc_type AS "docType", h.ref_no AS "refNo",
+                h.doc_date::text AS "docDate", h.debit_amount AS "debitAmount",
+                h.credit_amount AS "creditAmount", h.remarks,
+                h.legacy_ref AS "legacyRef",
+                h.reversed_by_doc_no AS "reversedByDocNo",
+                h.reversal_of_doc_no AS "reversalOfDocNo"
+         FROM ledger.histories h
+         WHERE h.company_id = (SELECT company_id FROM ledger.histories WHERE history_id = $1)
+           AND h.doc_no = (SELECT doc_no FROM ledger.histories WHERE history_id = $1)
+         ORDER BY h.history_id
+         FOR UPDATE`,
+        [historyId],
+      );
+      if (!rows.length) throw new NotFoundException('Ledger posting not found.');
+      const { companyId, docNo, docType, branchId, docDate } = rows[0];
+      const alreadyReversed = rows.find(row => row.reversedByDocNo);
+      if (alreadyReversed)
+        throw new BadRequestException(
+          `Ledger document ${docNo} has already been reversed by ${alreadyReversed.reversedByDocNo}.`,
+        );
+      if (rows.some(row => row.reversalOfDocNo))
+        throw new BadRequestException(
+          `Ledger document ${docNo} is a reversal and cannot be reversed.`,
+        );
+      if (rows.some(row => row.legacyRef))
+        throw new BadRequestException(
+          'Only documents posted from Ledger Capture can be reversed. Reverse the source transaction instead.',
+        );
+      let debitTotal = 0n;
+      let creditTotal = 0n;
+      for (const row of rows) {
+        debitTotal += toCents(row.debitAmount);
+        creditTotal += toCents(row.creditAmount);
+      }
+      if (debitTotal === 0n || debitTotal !== creditTotal)
+        throw new BadRequestException(
+          'This ledger document is not balanced, so it cannot be reversed automatically.',
+        );
+
+      const [{ today }] = await manager.query('SELECT CURRENT_DATE::text AS today');
+      const reversalDate = docDate > today ? docDate : today;
+      const period = reversalDate.slice(0, 7).replace('-', '');
+      const reversalDocNo = await nextLedgerDocumentNumber(
+        manager.getRepository(LedgerHistory),
+        companyId,
+        docType,
+        reversalDate,
+      );
+      const deltas = new Map<
+        string,
+        { accountId: string; debit: bigint; credit: bigint; count: number }
+      >();
+      for (const row of rows) {
+        const delta =
+          deltas.get(row.accountId) ??
+          { accountId: row.accountId, debit: 0n, credit: 0n, count: 0 };
+        delta.debit += toCents(row.creditAmount);
+        delta.credit += toCents(row.debitAmount);
+        delta.count++;
+        deltas.set(row.accountId, delta);
+      }
+      for (const delta of deltas.values()) {
+        await manager.query(
+          `INSERT INTO ledger.ledgers
+             (company_id, account_id, branch_id, debit_balance, credit_balance, transaction_count, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (company_id, account_id) DO UPDATE SET
+             debit_balance = ledger.ledgers.debit_balance + EXCLUDED.debit_balance,
+             credit_balance = ledger.ledgers.credit_balance + EXCLUDED.credit_balance,
+             transaction_count = ledger.ledgers.transaction_count + EXCLUDED.transaction_count,
+             updated_by = EXCLUDED.created_by,
+             updated_at = now()`,
+          [
+            companyId,
+            delta.accountId,
+            branchId ?? null,
+            centsToAmount(delta.debit),
+            centsToAmount(delta.credit),
+            delta.count,
+            userId ?? null,
+          ],
+        );
+      }
+
+      const reversalRows = rows.map(row => {
+        const debit = toCents(row.creditAmount);
+        const credit = toCents(row.debitAmount);
+        return {
+          accountId: row.accountId,
+          transactionType: toCents(row.debitAmount) > 0n ? 'CR' : 'DB',
+          amount: centsToAmount(
+            toCents(row.debitAmount) + toCents(row.creditAmount),
+          ),
+          entity: manager.getRepository(LedgerHistory).create({
+            companyId,
+            accountId: row.accountId,
+            branchId: branchId ?? null,
+            docNo: reversalDocNo,
+            docType,
+            refNo: row.refNo ?? null,
+            docDate: reversalDate,
+            period,
+            debitAmount: centsToAmount(debit),
+            creditAmount: centsToAmount(credit),
+            netAmount: centsToAmount(debit - credit),
+            remarks: `Reversal of ${docNo}`,
+            reversalOfDocNo: docNo,
+            createdBy: userId ?? null,
+          }),
+        };
+      });
+      const saved = await manager
+        .getRepository(LedgerHistory)
+        .save(reversalRows.map(row => row.entity));
+
+      await manager.query(
+        `UPDATE ledger.histories
+         SET reversed_by_doc_no = $3, reversed_by = $4, reversed_at = now()
+         WHERE company_id = $1 AND doc_no = $2`,
+        [companyId, docNo, reversalDocNo, userId ?? null],
+      );
+
+      return {
+        docNo,
+        reversalDocNo,
+        docType,
+        docDate: reversalDate,
+        period,
+        lines: reversalRows.map((row, index) => ({
+          historyId: saved[index]?.historyId,
+          accountId: row.accountId,
+          transactionType: row.transactionType,
+          amount: row.amount,
+        })),
+      };
+    });
+  }
+
   async stats(companyId: string) {
     const [row] = await this.dataSource.query(
       `SELECT
@@ -264,6 +407,9 @@ export class LedgerService {
         'h.net_amount AS "netAmount"',
         'h.remarks AS "remarks"',
         'h.unit_code AS "unitCode"',
+        'h.reversed_by_doc_no AS "reversedByDocNo"',
+        'h.reversal_of_doc_no AS "reversalOfDocNo"',
+        '(h.legacy_ref IS NULL) AS "reversible"',
         'a.account_id AS "accountId"',
         'a.account_code AS "accountCode"',
         'a.account_name AS "accountName"',
@@ -283,7 +429,8 @@ export class LedgerService {
               h.ref_no AS "refNo", to_char(h.doc_date, 'YYYY-MM-DD') AS "docDate", h.period AS "period",
               h.debit_amount AS "debitAmount", h.credit_amount AS "creditAmount",
               h.net_amount AS "netAmount", h.remarks AS "remarks", h.unit_code AS "unitCode",
-              h.created_at AS "createdAt",
+              h.created_at AS "createdAt", h.reversed_by_doc_no AS "reversedByDocNo",
+              h.reversal_of_doc_no AS "reversalOfDocNo",
               a.account_code AS "accountCode", a.account_name AS "accountName"
        FROM ledger.histories h
        JOIN accounting.accounts a ON a.account_id = h.account_id
@@ -397,6 +544,24 @@ export class LedgerService {
     }));
   }
 }
+
+type LedgerHistoryRow = {
+  historyId: string;
+  companyId: string;
+  accountId: string;
+  branchId: string | null;
+  docNo: string;
+  docType: string;
+  refNo: string | null;
+  docDate: string;
+  debitAmount: string;
+  creditAmount: string;
+  remarks: string | null;
+  legacyRef: string | null;
+  reversedByDocNo: string | null;
+  reversalOfDocNo: string | null;
+};
+
 function toCents(value: string | number): bigint {
   const raw = String(value);
   const negative = raw.startsWith('-');

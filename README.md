@@ -90,6 +90,14 @@ Python must be on PATH, or set `REPORT_PDF_PYTHON` to the Python executable. Inc
 
 Local PDF previews can be regenerated with `node scripts/preview-financial-reports.cjs`. They are written to `output/pdf/`, with QA data in `tmp/pdfs/`; both locations are excluded from Git. The sample previews use March 31, 2026 and the current posted ledger, not the scan's printed figures. No report generation changes the database.
 
+## Ledger reversal
+
+Ledger batches posted from **Ledger Capture** can be reversed: `POST /api/v1/ledger-batches/:historyId/reverse` requires the `LEDGER.canApprove` menu permission. The endpoint resolves the document from any of its history lines and rejects documents already reversed, reversal documents, documents posted by another source (payments, expenses, imports), and unbalanced documents.
+
+A reversal is a new ledger document dated on the reversal day (or the original date when the document is post-dated) with debits and credits swapped, numbered in the same document-type series. The original document stays in the posting history and is marked with the reversing document number, the user, and the time of reversal; the reversing rows point back with `reversal_of_doc_no`. Running account balances (`ledger.ledgers`) and reports net the pair out because both documents are posted to `ledger.histories`.
+
+Apply the schema with `npm run migrate:ledger-history-reversal`. Application startup does not run migrations.
+
 ## List pagination
 
 Journals (`/api/v1/journals`), chart of accounts (`/api/v1/accounts`), customers (`/api/v1/customers`), and suppliers (`/api/v1/suppliers`) support database pagination. The application uses 25 rows per page initially, with Previous/Next buttons and 10/25/50/100 row options. Changing the list, company, search, or page size returns to page 1. Search runs across all matching records in the selected company.
