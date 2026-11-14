@@ -1,5 +1,6 @@
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
 import { findCompanyList } from '../common/find-company-list';
+import { assertPostingDateOpen } from '../common/posting-date';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -34,6 +35,9 @@ export class JournalsService {
     if (!period || !period.isOpen || period.isClosed) {
       throw new BadRequestException('Accounting period does not exist or is closed.');
     }
+    if (period.fiscalYear.isClosed) {
+      throw new BadRequestException('Accounting period belongs to a closed fiscal year.');
+    }
     if (period.fiscalYear.companyId !== dto.companyId) {
       throw new BadRequestException('Accounting period must belong to the selected company.');
     }
@@ -62,6 +66,8 @@ export class JournalsService {
         throw new BadRequestException('Each line must have either a positive debit or a positive credit, but not both.');
       }
     }
+
+    await assertPostingDateOpen(this.dataSource, dto.companyId, dto.transactionDate);
 
     return this.dataSource.transaction(async manager => {
       const journalRepo = manager.getRepository(JournalEntry);
@@ -114,11 +120,12 @@ export class JournalsService {
       if (journal.status !== 'DRAFT' && journal.status !== 'APPROVED') {
         throw new BadRequestException('Only draft or approved journals can be posted.');
       }
-      const period = await manager.getRepository(AccountingPeriod).findOne({ where: { periodId: journal.periodId } });
-      if (!period || !period.isOpen || period.isClosed ||
+      const period = await manager.getRepository(AccountingPeriod).findOne({ where: { periodId: journal.periodId }, relations: { fiscalYear: true } });
+      if (!period || !period.isOpen || period.isClosed || period.fiscalYear.isClosed ||
         journal.transactionDate < period.startDate || journal.transactionDate > period.endDate) {
         throw new BadRequestException('The accounting period is closed or the transaction date is outside the period.');
       }
+      await assertPostingDateOpen(manager, journal.companyId, journal.transactionDate);
       const lines = await lr.find({ where: { journalEntryId: id }, order: { lineNumber: 'ASC' } });
       if (lines.length < 2) throw new BadRequestException('A journal must contain at least two lines.');
       const debitCents = lines.reduce((sum, l) => sum + toCents(l.debitAmount), 0n);
@@ -142,6 +149,8 @@ export class JournalsService {
     const original = await this.findOne(id);
     if (original.status !== 'POSTED') throw new BadRequestException('Only posted journals can be reversed.');
     if (original.reversedJournalId) throw new BadRequestException('This journal has already been reversed.');
+    if (original.sourceType === 'YEAR_END_CLOSE')
+      throw new BadRequestException('Year-end closing journals are managed by year-end processing and cannot be reversed here.');
 
     const reversal = await this.dataSource.transaction(async manager => {
       const jr = manager.getRepository(JournalEntry);

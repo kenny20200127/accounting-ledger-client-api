@@ -5,6 +5,7 @@ import { Account } from '../accounts/account.entity';
 import { Branch } from '../branches/branch.entity';
 import { Company } from '../companies/company.entity';
 import { CompanyListQueryDto } from '../common/company-list-query.dto';
+import { assertPostingDateOpen } from '../common/posting-date';
 import { CreateLedgerBatchDto } from './dto/create-ledger-batch.dto';
 import { nextLedgerDocumentNumber } from './ledger-document-number';
 import { Ledger } from './ledger.entity';
@@ -94,6 +95,7 @@ export class LedgerService {
     const period = dto.docDate.slice(0, 7).replace('-', '');
 
     return this.dataSource.transaction(async manager => {
+      await assertPostingDateOpen(manager, dto.companyId, dto.docDate, 'Document date');
       const docNo = await nextLedgerDocumentNumber(
         manager.getRepository(LedgerHistory),
         dto.companyId,
@@ -255,6 +257,7 @@ export class LedgerService {
 
       const [{ today }] = await manager.query('SELECT CURRENT_DATE::text AS today');
       const reversalDate = docDate > today ? docDate : today;
+      await assertPostingDateOpen(manager, companyId, reversalDate, 'Reversal date');
       const period = reversalDate.slice(0, 7).replace('-', '');
       const reversalDocNo = await nextLedgerDocumentNumber(
         manager.getRepository(LedgerHistory),

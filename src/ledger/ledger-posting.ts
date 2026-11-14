@@ -2,6 +2,7 @@
 // ledger: one history row per line against the account, auto document number,
 // and running balances in ledger.ledgers — inside the caller's transaction.
 import { EntityManager } from 'typeorm';
+import { assertPostingDateOpen } from '../common/posting-date';
 import { LedgerHistory } from './ledger-history.entity';
 import { nextLedgerDocumentNumber } from './ledger-document-number';
 
@@ -51,6 +52,7 @@ export async function postLedgerLines(
   if (await histories.exists({ where: { legacyRef: `AUTO::${input.sourceKey}::0` } })) {
     return null;
   }
+  await assertPostingDateOpen(manager, input.companyId, input.docDate);
 
   const docNo = await nextLedgerDocumentNumber(
     histories,

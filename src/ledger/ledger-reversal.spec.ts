@@ -49,6 +49,7 @@ function fixture(rows: DocRow[]) {
     if (sql.includes('SELECT history_id AS "historyId" FROM ledger.histories'))
       return [{ historyId: rows[0]?.historyId ?? '1' }];
     if (sql.includes('FOR UPDATE')) return rows;
+    if (sql.includes('FROM accounting.accounting_periods p')) return [];
     if (sql.includes('CURRENT_DATE')) return [{ today: '2026-11-13' }];
     if (sql.includes('INSERT INTO ledger.ledgers')) return [];
     if (sql.includes('UPDATE ledger.histories')) return [];

@@ -98,6 +98,26 @@ A reversal is a new ledger document dated on the reversal day (or the original d
 
 Apply the schema with `npm run migrate:ledger-history-reversal`. Application startup does not run migrations.
 
+## Month-end and year-end closing
+
+The **Accounting periods** menu is a closing workspace. It shows every month of a fiscal year with its posted journal, unposted journal, and ledger-document counts.
+
+- **Close a month** with `PATCH /api/v1/accounting-periods/:id/close` (`ACCOUNTING_PERIODS.canApprove`). A month with draft, pending, or approved journals in its date range cannot be closed. Closing blocks journal entry creation/posting, Ledger Capture, reversals, customer payments, and expenses dated inside the month; dates that fall in no configured period stay allowed.
+- **Reopen a month** with `PATCH /api/v1/accounting-periods/:id/reopen` while its fiscal year is open.
+- **Generate missing months** with `POST /api/v1/accounting-periods/generate-missing` and `{ "fiscalYearId": "<uuid>" }`. It creates calendar-month periods that do not overlap the existing ones and skips the whole action when nothing is missing.
+- **Closing status** is read with `GET /api/v1/accounting-periods/closing-status?fiscalYearId=<uuid>`.
+
+**Close the year** with `POST /api/v1/fiscal-years/:id/close` and `{ "retainedEarningsAccountId": "<uuid>" }` (`FISCAL_YEARS.canApprove`). It requires the account to be an active, posting EQUITY account for the company, refuses to run while any journal in the year is unposted, closes every month still open, and posts one balanced closing journal:
+
+- Revenue and expense balances are computed from posted journal lines plus ledger history for the fiscal year, excluding earlier closing journals and legacy migration records.
+- Each revenue or expense account is zeroed with its opposite side, and the net result is posted to retained earnings (credit for profit, debit for loss). Nothing is posted when there are no balances.
+- The journal is dated on the fiscal-year end date, referenced `YEC-<year name>`, and tagged `source_type = 'YEAR_END_CLOSE'` with `source_id = <fiscal year id>`. The last period of the year is used for `period_id`.
+- `accounting.fiscal_years.is_closed` is then set, so the year is locked.
+
+**Reopen the year** with `POST /api/v1/fiscal-years/:id/reopen`. It deletes the closing journal (lines and header), reopens every month in the year, and unlocks the fiscal year. Closing journals cannot be reversed through the journal reversal endpoint; use year reopen instead.
+
+Reports treat closing journals explicitly: the Profit & Loss excludes them so the reported result is unchanged by the close, and the Balance Sheet hides the saved Profit and Loss line once a closing journal exists for the report's fiscal year, because retained earnings already carries the result. Trial balances include the closing entries. No schema migration is required for closing; it uses the existing `source_type`/`source_id` journal columns.
+
 ## List pagination
 
 Journals (`/api/v1/journals`), chart of accounts (`/api/v1/accounts`), customers (`/api/v1/customers`), and suppliers (`/api/v1/suppliers`) support database pagination. The application uses 25 rows per page initially, with Previous/Next buttons and 10/25/50/100 row options. Changing the list, company, search, or page size returns to page 1. Search runs across all matching records in the selected company.

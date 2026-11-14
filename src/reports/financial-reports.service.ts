@@ -6,7 +6,8 @@ import { amount, cents, FinancialReport, groupCode, ReportRow } from './financia
 
 type AccountBalance = {
   accountCode: string; accountName: string; accountType: string; isHeader: boolean;
-  parentCode: string | null; mainCode: string; mainDescription: string; month: string; ytd: string; closing: string; activity: number; monthActivity: number;
+  parentCode: string | null; mainCode: string; mainDescription: string; month: string; ytd: string;
+  monthPl: string; ytdPl: string; closing: string; activity: number; monthActivity: number;
 };
 @Injectable()
 export class FinancialReportsService {
@@ -101,7 +102,7 @@ export class FinancialReportsService {
       branchName = branch.branch_name;
     }
     if (query.report === 'chart-of-accounts' || query.report === 'main-accounts') return this.structure(query, company, branchName);
-    const years = await this.dataSource.query(`SELECT start_date::text AS start,end_date::text AS end
+    const years = await this.dataSource.query(`SELECT fiscal_year_id AS "id", start_date::text AS start, end_date::text AS end
       FROM accounting.fiscal_years WHERE company_id=$1 AND ${query.fiscalYearId ? 'fiscal_year_id=$2' : 'start_date <= $2 AND end_date >= $2'}
       ORDER BY start_date DESC`, query.fiscalYearId ? [query.companyId,query.fiscalYearId] : [query.companyId,query.asOf]);
     if (query.fiscalYearId && (!years.length || query.asOf < years[0].start || query.asOf > years[0].end)) {
@@ -110,15 +111,27 @@ export class FinancialReportsService {
     if (!query.fiscalYearId && years.length > 1) throw new BadRequestException('Overlapping fiscal years: select the fiscal year for this report.');
     const fiscalYearStart = years[0]?.start ?? query.asOf.slice(0,4)+'-01-01';
     const monthStart = query.asOf.slice(0,7)+'-01';
+    const fiscalYearId = years[0]?.id as string | undefined;
+    const [closingYearJournal] = fiscalYearId
+      ? await this.dataSource.query(
+          `SELECT 1 FROM accounting.journal_entries
+           WHERE company_id=$1 AND source_type='YEAR_END_CLOSE' AND source_id=$2 AND transaction_date <= $3
+           LIMIT 1`,
+          [query.companyId,fiscalYearId,query.asOf],
+        )
+      : [];
+    // Once the year is closed, revenue and expense already sit in retained
+    // earnings, so the saved P&L equity line would double count.
+    const yearClosed = !!closingYearJournal;
     const balances: AccountBalance[] = await this.dataSource.query(`
       WITH posted_lines AS (
-        SELECT l.account_id,l.debit_amount-l.credit_amount AS net,j.transaction_date
+        SELECT l.account_id,l.debit_amount-l.credit_amount AS net,j.transaction_date,j.source_type
         FROM accounting.journal_entry_lines l JOIN accounting.journal_entries j USING(journal_entry_id)
         WHERE j.company_id=$1 AND j.status IN('POSTED','REVERSED') AND j.transaction_date <= $2
           AND NOT EXISTS (SELECT 1 FROM accounting.legacy_migration_records r WHERE r.journal_entry_id=j.journal_entry_id)
           ${query.branchId ? 'AND j.branch_id=$5' : ''}
         UNION ALL
-        SELECT h.account_id,h.debit_amount-h.credit_amount AS net,h.doc_date AS transaction_date
+        SELECT h.account_id,h.debit_amount-h.credit_amount AS net,h.doc_date AS transaction_date,NULL::varchar AS source_type
         FROM ledger.histories h
         WHERE h.company_id=$1 AND h.doc_date <= $2
           ${query.branchId ? 'AND h.branch_id=$5' : ''}
@@ -127,6 +140,8 @@ export class FinancialReportsService {
         p.account_code AS "parentCode",ma.main_code AS "mainCode",ma.description AS "mainDescription",
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $3),0)::numeric(20,2)::text AS month,
         COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $4),0)::numeric(20,2)::text AS ytd,
+        COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $3 AND l.source_type IS DISTINCT FROM 'YEAR_END_CLOSE'),0)::numeric(20,2)::text AS "monthPl",
+        COALESCE(SUM(l.net) FILTER(WHERE l.transaction_date >= $4 AND l.source_type IS DISTINCT FROM 'YEAR_END_CLOSE'),0)::numeric(20,2)::text AS "ytdPl",
         COALESCE(SUM(l.net),0)::numeric(20,2)::text AS closing,COUNT(l.account_id)::int AS activity,COUNT(l.account_id) FILTER(WHERE l.transaction_date >= $3)::int AS "monthActivity"
       FROM accounting.accounts a JOIN accounting.account_types t USING(account_type_id)
       LEFT JOIN accounting.accounts p ON p.account_id=a.parent_account_id AND p.company_id=a.company_id
@@ -141,13 +156,14 @@ export class FinancialReportsService {
       const code = groupCode(a);
       if (!labels.has(code) && a.mainDescription) labels.set(code, a.mainDescription);
     }
-    const groups = new Map<string,{ code: string; name: string; type: string; month: bigint; ytd: bigint; closing: bigint }>();
+    const groups = new Map<string,{ code: string; name: string; type: string; month: bigint; ytd: bigint; closing: bigint; monthPl: bigint; ytdPl: bigint }>();
     for (const a of balances) {
       if (a.isHeader && !a.activity) continue;
       const code=groupCode(a);
       let group=groups.get(code);
-      if (!group) { group={code,name:labels.get(code) || a.accountName,type:a.accountType,month:0n,ytd:0n,closing:0n}; groups.set(code,group); }
+      if (!group) { group={code,name:labels.get(code) || a.accountName,type:a.accountType,month:0n,ytd:0n,closing:0n,monthPl:0n,ytdPl:0n}; groups.set(code,group); }
       group.month+=cents(a.month); group.ytd+=cents(a.ytd); group.closing+=cents(a.closing);
+      group.monthPl+=cents(a.monthPl); group.ytdPl+=cents(a.ytdPl);
     }
     if (query.groupCodes?.some(code=>!groups.has(code))) throw new BadRequestException('One or more account groups do not belong to this company.');
     const report: FinancialReport = {
@@ -194,8 +210,8 @@ export class FinancialReportsService {
         report.rows.push({description:section,isSection:true});
         let month=0n,ytd=0n;
         for (const group of members) {
-          month+=group.month;ytd+=group.ytd;
-          if (query.includeZero || group.month!==0n || group.ytd!==0n) report.rows.push({description:group.name,section,monthAmount:amount(group.month),ytdAmount:amount(group.ytd)});
+          month+=group.monthPl;ytd+=group.ytdPl;
+          if (query.includeZero || group.monthPl!==0n || group.ytdPl!==0n) report.rows.push({description:group.name,section,monthAmount:amount(group.monthPl),ytdAmount:amount(group.ytdPl)});
         }
         report.rows.push({description:'Total '+section,isTotal:true,monthAmount:amount(month),ytdAmount:amount(ytd)});
         monthTotal+=month;ytdTotal+=ytd;
@@ -227,7 +243,7 @@ export class FinancialReportsService {
           report.rows.push({accountCode:a.accountCode,description:a.accountName,balance:amount(closing)});
           sectionTotal+=closing;
         }
-        if (section.type==='EQUITY') {
+        if (section.type==='EQUITY' && !yearClosed) {
           const addUncodedProfitLoss=()=>{
             if (!query.includeZero && profitLossCents===0n) return;
             report.rows.push({description:'Profit and loss total',balance:amount(profitLossCents)});

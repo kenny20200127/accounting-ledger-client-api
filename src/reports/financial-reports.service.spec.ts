@@ -13,14 +13,16 @@ const base = { companyId, asOf: '2026-03-31', includeZero: true };
 function balance(overrides: Partial<{
   accountCode: string; accountName: string; accountType: string; isHeader: boolean;
   parentCode: string | null; mainCode: string; mainDescription: string;
-  month: string; ytd: string; closing: string; activity: number; monthActivity: number;
+  month: string; ytd: string; monthPl: string; ytdPl: string; closing: string;
+  activity: number; monthActivity: number;
 }> = {}) {
-  return {
+  const row = {
     accountCode: '156000-00001', accountName: 'Cash account', accountType: 'ASSET',
     isHeader: false, parentCode: null, mainCode: '156000', mainDescription: 'Cash and bank',
     month: '0.00', ytd: '0.00', closing: '0.00', activity: 0, monthActivity: 0,
     ...overrides,
   };
+  return { ...row, monthPl: overrides.monthPl ?? row.month, ytdPl: overrides.ytdPl ?? row.ytd };
 }
 
 function fixture(

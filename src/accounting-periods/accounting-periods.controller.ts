@@ -11,6 +11,7 @@ Query,
 } from '@nestjs/common';
 import { AccountingPeriodsService } from './accounting-periods.service';
 import { CreateAccountingPeriodDto } from './dto/create-accounting-period.dto';
+import { GeneratePeriodsDto } from './dto/generate-periods.dto';
 
 @ApiTags('accounting-periods')
 @ApiBearerAuth()
@@ -30,6 +31,16 @@ findAll(@Req() req: any, @Query('fiscalYearId') fiscalYearId?: string, @Query('c
 return this.accountingPeriodsService.findAll(fiscalYearId, companyId ?? (req.actor.isPlatformAdmin ? undefined : req.actor.companyId));
 }
 
+@Get('closing-status')
+closingStatus(@Query('fiscalYearId', new ParseUUIDPipe()) fiscalYearId: string) {
+return this.accountingPeriodsService.closingStatus(fiscalYearId);
+}
+
+@Post('generate-missing')
+generateMissing(@Body() dto: GeneratePeriodsDto, @Req() req: any) {
+return this.accountingPeriodsService.generateMissing(dto.fiscalYearId, req.actor.userId);
+}
+
 @Get(':id')
 findOne(@Param('id', ParseUUIDPipe) id: string) {
 return this.accountingPeriodsService.findOne(id);
@@ -41,7 +52,7 @@ return this.accountingPeriodsService.close(id, req.actor.userId);
 }
 
 @Patch(':id/reopen')
-reopen(@Param('id', ParseUUIDPipe) id: string) {
-return this.accountingPeriodsService.reopen(id);
+reopen(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+return this.accountingPeriodsService.reopen(id, req.actor.userId);
 }
 }
