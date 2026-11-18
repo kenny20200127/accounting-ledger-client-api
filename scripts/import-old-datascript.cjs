@@ -11,12 +11,12 @@
 'use strict';
 require('dotenv').config({ quiet: true });
 const { Client } = require('pg');
-const { rows } = require('./legacy-sql-parser.cjs');
+const { stream } = require('./legacy-sql-stream-parser.cjs');
 
 const DUMP = process.argv[2] || 'tmp/OldDatascript-utf8.sql';
-const COMPANY_CODE = 'KB01';
+const COMPANY_CODE = process.argv[3] || 'KB01';
 const LEGACY_BRANCH_CODE = '4';
-const CURRENT_YEAR = 2025; // accledger monthNN buckets; history periods are all 2025.
+let CURRENT_YEAR = 2025; // overridden by accsystem.processyear (accledger monthNN buckets)
 
 const DOC_TYPE_MAP = { JV: 'JV', PC: 'PV', RC: 'RV' };
 
@@ -42,6 +42,7 @@ function round2(v) {
     user: process.env.DB_USERNAME,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
+    ssl: process.env.DB_SSL?.toLowerCase() === 'true' ? { rejectUnauthorized: false } : undefined,
   });
   await db.connect();
 
@@ -65,14 +66,17 @@ function round2(v) {
   let skippedHistoryNoAcct = 0;
   let skippedLedgerNoAcct = 0;
 
-  for (const { table, row } of rows(DUMP)) {
-    if (table === 'acchistory') {
+  await stream(DUMP, ({ table, row }) => {
+    if (table === 'accsystem') {
+      const year = Number(row.processyear);
+      if (Number.isInteger(year) && year > 2000) CURRENT_YEAR = year;
+    } else if (table === 'acchistory') {
       const acct = row.his_accnumber;
-      if (!acct) { skippedHistoryNoAcct++; continue; }
+      if (!acct) { skippedHistoryNoAcct++; return; }
       const accountId = accountByCode.get(acct);
-      if (!accountId) { skippedHistoryNoAcct++; continue; }
+      if (!accountId) { skippedHistoryNoAcct++; return; }
       const docDate = ymd(row.his_trandate) || ymd((row.his_period || '') + '01');
-      if (!docDate) { skippedHistoryNoAcct++; continue; }
+      if (!docDate) { skippedHistoryNoAcct++; return; }
       const period = (row.his_period && row.his_period.length === 6 && row.his_period !== '0')
         ? row.his_period
         : docDate.slice(0, 7).replace('-', '');
@@ -85,7 +89,7 @@ function round2(v) {
         // lives in accledger/ledger.ledgers, so keep them out of the posting
         // history but leave a migration record for traceability.
         skipRecords.push([legacyRef, row]);
-        continue;
+        return;
       }
       histories.push({
         accountId,
@@ -106,7 +110,7 @@ function round2(v) {
       histCountByAcct.set(acct, (histCountByAcct.get(acct) || 0) + 1);
     } else if (table === 'accledger') {
       const acct = row.acctnumber;
-      if (!acct || !accountByCode.has(acct)) { skippedLedgerNoAcct++; continue; }
+      if (!acct || !accountByCode.has(acct)) { skippedLedgerNoAcct++; return; }
       const agg = ledgerAgg.get(acct) || { opening: 0, debit: 0, credit: 0, budget: 0, prv1: 0, prv2: 0, months: {} };
       agg.opening += Number(row.openbalance || 0);
       agg.debit += Number(row.debitbalance || 0);
@@ -129,7 +133,7 @@ function round2(v) {
     } else if (table === 'accchart') {
       chartNames.push({ code: row.acctnumber, name: (row.description || '').trim() });
     }
-  }
+  });
 
   // ---- Load in one transaction ---------------------------------------------
   await db.query('BEGIN');

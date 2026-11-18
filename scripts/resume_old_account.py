@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+from uuid import uuid4
 import psycopg2
 from psycopg2.extras import Json, execute_values, RealDictCursor
 from migrate_old_account import parse_mssql_values, determine_account_type
@@ -142,7 +143,10 @@ def migrate(path, dry_run=False, phases=None):
     company_code = text(system['coycode'])
     conn = psycopg2.connect(host=os.getenv('DB_HOST','localhost'), port=os.getenv('DB_PORT','5432'),
         user=os.getenv('DB_USERNAME','postgres'), password=os.getenv('DB_PASSWORD'),
-        dbname=os.getenv('DB_DATABASE','accountingdb'))
+        dbname=os.getenv('DB_DATABASE','accountingdb'),
+        sslmode='require' if os.getenv('DB_SSL','').lower() == 'true' else 'prefer',
+        connect_timeout=30, keepalives=1, keepalives_idle=30,
+        keepalives_interval=10, keepalives_count=5)
     report = {'companyCode': company_code, 'dryRun': dry_run, 'sourceCounts': {k:len(v) for k,v in source.items()},
               'vouchers': {}, 'issues': [], 'masterData': {}}
     try:
@@ -190,12 +194,16 @@ def migrate(path, dry_run=False, phases=None):
                         type_code = determine_account_type(r.get('acctcode1'),r.get('acctype'))
                         if type_code not in types: raise ValueError('Missing account type '+type_code)
                         cur.execute('''INSERT INTO accounting.accounts
-                          (company_id,account_code,account_name,account_type_id,is_header,allow_posting,is_control_account)
-                          VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(company_id,account_code) DO UPDATE SET
+                          (company_id,account_code,account_name,account_type_id,is_header,allow_posting,is_control_account,main_account_id)
+                          VALUES (%s,%s,%s,%s,%s,%s,%s,
+                            (SELECT m.main_account_id FROM accounting.main_accounts m
+                              WHERE m.company_id=%s AND m.main_code=split_part(%s,'-',1)))
+                          ON CONFLICT(company_id,account_code) DO UPDATE SET
                           account_name=EXCLUDED.account_name,account_type_id=EXCLUDED.account_type_id,
                           is_header=EXCLUDED.is_header,allow_posting=EXCLUDED.allow_posting,
                           is_control_account=EXCLUDED.is_control_account''',
-                          (cid,code,text(r.get('description'))[:150],types[type_code],header,not header,text(r.get('acctsubtype')) in ('2','3')))
+                          (cid,code,text(r.get('description'))[:150],types[type_code],header,not header,
+                           text(r.get('acctsubtype')) in ('2','3'),cid,code))
                 # Assign each detail to its six-digit header if present.
                 cur.execute('''UPDATE accounting.accounts a SET parent_account_id=p.account_id
                   FROM accounting.accounts p WHERE a.company_id=%s AND p.company_id=a.company_id
@@ -296,12 +304,21 @@ def migrate(path, dry_run=False, phases=None):
                   (company_id,source_table,source_key,status,source_data) VALUES %s
                   ON CONFLICT(company_id,source_table,source_key) DO UPDATE SET source_data=EXCLUDED.source_data''',snapshots,page_size=1000)
 
+            # Header tracking keys are preloaded so each voucher costs no round
+            # trips; journals, lines and tracking records are bulk-inserted.
+            existing_headers = {}
+            if not dry_run:
+                cur.execute('''SELECT source_table,source_key,source_data FROM accounting.legacy_migration_records
+                  WHERE company_id=%s AND source_table IN ('ac_jvheader','ac_rctheader','ac_pcvheader')''',(cid,))
+                existing_headers = {(r['source_table'],r['source_key']):r['source_data'] for r in cur.fetchall()}
+
             for phase,prefix,source_type,cc,bc in SPECS:
                 if phase not in phases: continue
                 by_key = defaultdict(list)
                 for d in source['ac_'+prefix+'details']:
                     by_key[voucher_key(d,prefix,cc,bc)].append(d)
                 stats = Counter()
+                journals, journal_lines, tracking = [], [], []
                 header_counts = Counter(voucher_key(h,prefix,cc,bc,True) for h in source['ac_'+prefix+'header'])
                 seen = Counter()
                 for h in source['ac_'+prefix+'header']:
@@ -317,55 +334,37 @@ def migrate(path, dry_run=False, phases=None):
                     stats[record_status] += 1
                     if issues and not deleted: report['issues'].append({'table':'ac_'+prefix+'header','key':source_key,'issues':issues})
                     if dry_run: continue
-                    # The tracking key owns the journal on every subsequent run.
-                    cur.execute('''SELECT journal_entry_id,source_data FROM accounting.legacy_migration_records
-                      WHERE company_id=%s AND source_table=%s AND source_key=%s''',(cid,'ac_'+prefix+'header',source_key))
-                    prior = cur.fetchone()
-                    jid = prior['journal_entry_id'] if prior else None
-                    if prior:
-                        if prior['source_data'] != json.loads(encode(h)):
+                    source_table = 'ac_'+prefix+'header'
+                    if (source_table, source_key) in existing_headers:
+                        if existing_headers[(source_table, source_key)] != json.loads(encode(h)):
                             raise ValueError('Tracked source header changed; review before reimport: '+source_key)
                         # Never undo a user's later edits or double import lines.
                         stats['UNCHANGED'] += 1
                         continue
-                    # Recover only pristine empty headers matching the old importer exactly.
-                    cur.execute('''SELECT j.* FROM accounting.journal_entries j WHERE source_type=%s
-                      AND reference_number=%s AND transaction_date=%s AND total_debit=%s AND total_credit=%s
-                      AND created_by IS NULL AND posted_by IS NULL AND source_id IS NULL AND reversed_journal_id IS NULL
-                      AND status='POSTED' AND NOT EXISTS(SELECT 1 FROM accounting.journal_entry_lines l WHERE l.journal_entry_id=j.journal_entry_id)
-                      ORDER BY j.journal_number FOR UPDATE''',(source_type,key[2],txn_date,money(h.get(prefix+'h_debit')),money(h.get(prefix+'h_credit'))))
-                    candidates = cur.fetchall()
-                    if len(candidates)>1 and header_counts[key]==1: raise ValueError('Multiple old headers match '+source_key)
-                    existing = candidates[0] if candidates else None
+                    jid = None
                     period = periods.get((int(txn_date[:4]),int(txn_date[5:7]))) if txn_date else None
-                    if not period:
-                        # Bad dates retain source evidence without inventing a date.
-                        if existing: raise ValueError('Cannot resolve historical period '+source_key)
-                        jid = None
-                    else:
+                    if period:
                         branch = branches[key[1]]
                         description = text(h.get(prefix+'h_remark')) or source_type+' '+key[2]
-                        if existing:
-                            jid = existing['journal_entry_id']
-                            cur.execute('''UPDATE accounting.journal_entries SET company_id=%s,branch_id=%s,period_id=%s,
-                              description=%s,status=%s,total_debit=%s,total_credit=%s,posted_at=%s WHERE journal_entry_id=%s''',
-                              (cid,branch,period,description,status,debit,credit,datetime.now() if status=='POSTED' else None,jid))
-                            stats['REPAIRED'] += 1
-                        else:
-                            cur.execute('''INSERT INTO accounting.journal_entries
-                              (company_id,branch_id,period_id,transaction_date,reference_number,description,source_type,status,total_debit,total_credit,posted_at)
-                              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING journal_entry_id''',
-                              (cid,branch,period,txn_date,key[2],description,source_type,status,debit,credit,datetime.now() if status=='POSTED' else None))
-                            jid = cur.fetchone()['journal_entry_id']
-                            stats['CREATED'] += 1
-                        if lines:
-                            execute_values(cur,'''INSERT INTO accounting.journal_entry_lines
-                              (journal_entry_id,account_id,line_number,description,debit_amount,credit_amount) VALUES %s''',
-                              [(jid,*line[:1],i+1,line[1],line[2],line[3]) for i,line in enumerate(lines)])
-                    cur.execute('''INSERT INTO accounting.legacy_migration_records
-                      (company_id,source_table,source_key,journal_entry_id,status,issues,source_data)
-                      VALUES(%s,%s,%s,%s,%s,%s,%s)''',
-                      (cid,'ac_'+prefix+'header',source_key,jid,record_status,Json(issues),Json(h,dumps=encode)))
+                        jid = uuid4()
+                        journals.append((jid,cid,branch,period,txn_date,key[2],description,source_type,
+                                         status,debit,credit,datetime.now() if status=='POSTED' else None))
+                        for i,line in enumerate(lines):
+                            journal_lines.append((uuid4(),jid,line[0],i+1,line[1],line[2],line[3]))
+                        stats['CREATED'] += 1
+                    # Bad dates retain source evidence without inventing a date.
+                    tracking.append((cid,source_table,source_key,jid,record_status,Json(issues),Json(h,dumps=encode)))
+                if not dry_run:
+                    execute_values(cur,'''INSERT INTO accounting.journal_entries
+                      (journal_entry_id,company_id,branch_id,period_id,transaction_date,reference_number,
+                       description,source_type,status,total_debit,total_credit,posted_at) VALUES %s''',
+                      journals,page_size=500)
+                    execute_values(cur,'''INSERT INTO accounting.journal_entry_lines
+                      (journal_line_id,journal_entry_id,account_id,line_number,description,debit_amount,credit_amount)
+                      VALUES %s''',journal_lines,page_size=1000)
+                    execute_values(cur,'''INSERT INTO accounting.legacy_migration_records
+                      (company_id,source_table,source_key,journal_entry_id,status,issues,source_data) VALUES %s''',
+                      tracking,page_size=500)
                 report['vouchers'][source_type] = dict(stats)
             if 9 in phases and not dry_run:
                 # Cancel the empty, synthetic balance header from the failed import.
